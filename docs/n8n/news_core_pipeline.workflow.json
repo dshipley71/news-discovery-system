@@ -1,0 +1,186 @@
+{
+  "name": "News Discovery Core Pipeline (Webhook -> HN -> Normalize -> Aggregate)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "news-discovery-core",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Webhook Input",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body ?? $json;\nconst topic = String(body.topic ?? '').trim();\nconst startDate = String(body.start_date ?? '').trim();\nconst endDate = String(body.end_date ?? '').trim();\n\nif (!topic) {\n  throw new Error('topic is required');\n}\nif (!/^\\d{4}-\\d{2}-\\d{2}$/.test(startDate) || !/^\\d{4}-\\d{2}-\\d{2}$/.test(endDate)) {\n  throw new Error('start_date and end_date must be YYYY-MM-DD');\n}\n\nconst start = new Date(`${startDate}T00:00:00.000Z`);\nconst end = new Date(`${endDate}T23:59:59.999Z`);\nif (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {\n  throw new Error('Invalid date values supplied');\n}\nif (start > end) {\n  throw new Error('start_date must be <= end_date');\n}\n\nconst now = new Date();\nconst endDateOnly = new Date(`${endDate}T00:00:00.000Z`);\nconst nowDateOnly = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));\nif (endDateOnly > nowDateOnly) {\n  throw new Error('end_date cannot be in the future');\n}\n\nconst maxRangeDays = 30;\nconst diffDays = Math.floor((endDateOnly - new Date(`${startDate}T00:00:00.000Z`)) / (1000 * 60 * 60 * 24));\nif (diffDays > maxRangeDays) {\n  throw new Error('date range must be 30 days or less');\n}\n\nconst runId = `run_${Math.random().toString(16).slice(2, 12)}`;\nconst startedAt = new Date().toISOString();\n\nreturn [{\n  json: {\n    run_id: runId,\n    started_at: startedAt,\n    input: {\n      topic,\n      start_date: startDate,\n      end_date: endDate\n    },\n    source: {\n      id: 'hackernews_algolia',\n      endpoint: 'https://hn.algolia.com/api/v1/search_by_date',\n      tags: 'story'\n    },\n    ingestion_query: {\n      query: topic,\n      tags: 'story',\n      numericFilters: `created_at_i>=${Math.floor(start.getTime() / 1000)},created_at_i<=${Math.floor(end.getTime() / 1000)}`,\n      hitsPerPage: 200\n    }\n  }\n}];"
+      },
+      "id": "2",
+      "name": "Prepare Run Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$json.source.endpoint}}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{$json.ingestion_query.query}}"
+            },
+            {
+              "name": "tags",
+              "value": "={{$json.ingestion_query.tags}}"
+            },
+            {
+              "name": "numericFilters",
+              "value": "={{$json.ingestion_query.numericFilters}}"
+            },
+            {
+              "name": "hitsPerPage",
+              "value": "={{$json.ingestion_query.hitsPerPage}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3",
+      "name": "Ingest from Hacker News Algolia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "position",
+        "options": {}
+      },
+      "id": "4",
+      "name": "Merge Input + Ingestion",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1040,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const runId = $json.run_id;\nconst startedAt = $json.started_at;\nconst input = $json.input;\nconst source = $json.source;\n\nconst responsePayload = $json;\nconst rawHits = Array.isArray(responsePayload.hits) ? responsePayload.hits : [];\nconst hitsCount = Number(responsePayload.nbHits ?? rawHits.length ?? 0);\n\nconst canonicalArticles = [];\nconst validationIssues = [];\n\nfor (let i = 0; i < rawHits.length; i += 1) {\n  const hit = rawHits[i] ?? {};\n  const title = hit.title ?? hit.story_title ?? null;\n  const url = hit.url ?? hit.story_url ?? null;\n  const publishedAt = hit.created_at ?? null;\n  const objectId = hit.objectID ?? null;\n\n  const missingFields = [];\n  if (!title) missingFields.push('title');\n  if (!publishedAt) missingFields.push('published_at');\n  if (!objectId) missingFields.push('object_id');\n\n  if (missingFields.length > 0) {\n    validationIssues.push({\n      hit_index: i,\n      object_id: objectId,\n      missing_fields: missingFields\n    });\n    continue;\n  }\n\n  canonicalArticles.push({\n    article_id: `${source.id}:${objectId}`,\n    title,\n    url,\n    published_at: publishedAt,\n    source: source.id\n  });\n}\n\nconst countsByDay = {};\nfor (const article of canonicalArticles) {\n  if (!article.published_at) continue;\n  const parsed = new Date(article.published_at);\n  if (Number.isNaN(parsed.getTime())) continue;\n  const day = parsed.toISOString().slice(0, 10);\n  countsByDay[day] = (countsByDay[day] ?? 0) + 1;\n}\n\nconst dailyCounts = Object.keys(countsByDay)\n  .sort()\n  .map((day) => ({ day, article_count: countsByDay[day] }));\n\nreturn [{\n  json: {\n    run_id: runId,\n    started_at: startedAt,\n    input,\n    stages: {\n      ingestion: {\n        source: source.id,\n        requested_at: new Date().toISOString(),\n        query: input.topic,\n        hits_count: hitsCount,\n        raw_hits: rawHits\n      },\n      normalization: {\n        canonical_articles: canonicalArticles,\n        validation_issues: validationIssues,\n        valid_count: canonicalArticles.length,\n        invalid_count: validationIssues.length\n      },\n      aggregation: {\n        daily_counts: dailyCounts,\n        total_days: dailyCounts.length\n      }\n    }\n  }\n}];"
+      },
+      "id": "5",
+      "name": "Normalize + Aggregate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}",
+        "options": {}
+      },
+      "id": "6",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1520,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Input": {
+      "main": [
+        [
+          {
+            "node": "Prepare Run Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Run Input": {
+      "main": [
+        [
+          {
+            "node": "Ingest from Hacker News Algolia",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Input + Ingestion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ingest from Hacker News Algolia": {
+      "main": [
+        [
+          {
+            "node": "Merge Input + Ingestion",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Input + Ingestion": {
+      "main": [
+        [
+          {
+            "node": "Normalize + Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize + Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {},
+  "versionId": "b1af9f2d-96e1-4f0d-b25a-35b8a2db7b6b",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "active": false,
+  "tags": []
+}
