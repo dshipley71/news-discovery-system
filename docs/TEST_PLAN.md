@@ -34,21 +34,25 @@ Testing must mirror analyst-visible workflow stages and run entirely from the UI
 - Incomplete raw records -> expect flagging and schema completeness metrics.
 - Valid records -> expect canonical schema compliance.
 
-## T4 Deduplication
-- Known duplicate set -> expect collapse to canonical record with lineage map.
-- Distinct articles -> expect preserved separate records.
+## T4 Geospatial Extraction
+- Explicit location mention in article -> expect populated city/region/country and coordinates.
+- Inferred-only location -> expect extraction_method=inferred with visible confidence.
+- Ambiguous place name -> expect ambiguity flag and notes.
+- Missing article linkage -> expect stage failure.
 
-## T5 Event Clustering
+## T5 Geospatial Aggregation
+- Multiple mentions of same location in one article -> unique article count increments once.
+- Nearby locations within configured radius -> grouped to shared location group.
+- Article with multiple distinct locations -> appears in multiple groups without duplicate inflation.
+
+## T6 Event Clustering
 - Thematically linked articles -> expect same event group with membership scores.
 - Unrelated articles -> expect separate clusters or unassigned bucket.
+- Cluster detail includes linked location group IDs.
 
-## T6 Temporal Analytics
-- Synthetic spike profile -> expect spike marker on timeline.
+## T7 Temporal Analytics
+- Spike-like profile -> expect spike marker on timeline.
 - Sustained elevated profile -> expect sustained trend tag.
-
-## T7 Geospatial
-- Ambiguous place names -> expect uncertainty flags.
-- Explicit location mentions -> expect resolved map points with evidence links.
 
 ## T8 Narrative Comparison
 - Conflicting source claims -> expect contradiction labeling with citations.
@@ -57,6 +61,7 @@ Testing must mirror analyst-visible workflow stages and run entirely from the UI
 ## T9 Evidence Packaging
 - Every summary claim -> must map to citation(s).
 - Missing citation mapping -> expect blocking failure.
+- Geospatial claim -> must include location or location-group artifact link.
 
 ## T10 Report Composition
 - Missing required section -> expect publication block.
@@ -83,12 +88,17 @@ Testing must mirror analyst-visible workflow stages and run entirely from the UI
 - Active developing topic.
 - Expected: spike detection + developing-story warning.
 
+### AT-5 Geospatial inspection run
+- Topic with multi-location reporting.
+- Expected: map markers render; drill-down path works location → cluster → articles; ambiguity visible.
+
 ## 6) Quality Gates
 A run can be marked production-ready only if:
 - Mandatory outputs exist (events, timeline, map, narrative, report).
 - Citation completeness threshold is met.
 - Critical validation failures are zero.
 - Critic loop either passes gates or exits at max iterations with explicit blockers.
+- Geospatial counts are deduplicated and traceable to article IDs.
 
 ## 7) Evidence of Test Completion
 For each test execution, store:
