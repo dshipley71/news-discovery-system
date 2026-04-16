@@ -49,6 +49,10 @@ Testing must mirror analyst-visible workflow stages and run entirely from the UI
 - Thematically linked articles -> expect same event group with membership scores.
 - Unrelated articles -> expect separate clusters or unassigned bucket.
 - Cluster detail includes linked location group IDs.
+- Cluster summary table in Gradio -> expect one row per produced cluster_id with article_count and duplicate_ratio populated.
+- Selecting cluster_id in Gradio explorer -> expect cluster detail panel and article list to update for that cluster.
+- Duplicate-heavy detection -> if `duplicate_ratio >= 0.5`, expect `duplicate_heavy=true` in summary table and detail panel.
+- Source concentration visibility -> expect source-bias metric (`top_source_ratio`) present for each cluster.
 
 ## T7 Temporal Analytics
 - Spike-like profile -> expect spike marker on timeline.
@@ -62,6 +66,8 @@ Testing must mirror analyst-visible workflow stages and run entirely from the UI
 - Every summary claim -> must map to citation(s).
 - Missing citation mapping -> expect blocking failure.
 - Geospatial claim -> must include location or location-group artifact link.
+- Citation explorer index -> expect counts by claim classification (`supported`, `inferred`, `speculative`) and source attribution.
+- Evidence bundle view -> expect explicit lineage rows with cluster ID, article ID, and citation ID.
 
 ## T10 Report Composition
 - Missing required section -> expect publication block.
@@ -91,6 +97,14 @@ Testing must mirror analyst-visible workflow stages and run entirely from the UI
 ### AT-5 Geospatial inspection run
 - Topic with multi-location reporting.
 - Expected: map markers render; drill-down path works location → cluster → articles; ambiguity visible.
+
+### AT-6 Cluster and citation inspection run
+- Valid topic/date run with returned canonical articles.
+- Expected:
+  - clusters visible and navigable from summary table and selector,
+  - citations traceable through citation index and citation records,
+  - evidence bundle rows link cluster/article/citation IDs correctly,
+  - duplicate-heavy clusters and source concentration are visible in UI.
 
 ## 6) Quality Gates
 A run can be marked production-ready only if:
