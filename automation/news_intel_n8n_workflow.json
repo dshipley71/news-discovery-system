@@ -1,83 +1,145 @@
-# SYSTEM.md
-
-## Purpose
-Define the main operating model for the no-source-code news intelligence system.
-
-## Required Inputs
-- topic
-- date window in days
-
-## Default Mode
-- wiki off
-- bounded run
-- evidence-backed markdown outputs
-- editable artifact workspace
-
-## Agent Model
-1. User Intent Agent
-2. Source Routing Agent
-3. Source Collection Layer
-4. Normalization & Deduplication Agent
-5. Clustering Agent
-6. Temporal Analytics Agent
-7. Geospatial Analysis Agent
-8. Sentiment/Tone Agent
-9. Narrative Analysis Agent
-10. Report Synthesis Agent
-11. Critic / Quality Agent
-
-## Workflow
-1. Capture topic and days
-2. Route source strategy
-3. Collect candidate articles
-4. Normalize metadata
-5. Deduplicate
-6. Create event clusters
-7. Run temporal analysis
-8. Run geospatial analysis
-9. Run sentiment/tone analysis
-10. Compare narratives
-11. Build citations
-12. Draft final report
-13. Check quality gates
-
-## Routing Rules
-- prefer source diversity
-- avoid single-source dominance
-- deduplicate before analysis
-- keep wiki off unless explicitly requested
-
-## Core Records
-### Article Record
-- id
-- title
-- source
-- date
-- url
-- evidence_level
-- cluster_id
-- sentiment
-- entities
-
-### Cluster Record
-- cluster_id
-- name
-- description
-- key_articles
-- notes
-
-### Citation Record
-- claim
-- cluster
-- articles
-- sources
-- label
-
-## Quality Gates
-A run is complete only if:
-- major claims are cited
-- peaks are explained
-- clusters are defined
-- deduplication is performed
-- limitations are stated
-- wiki remains off unless explicitly requested
+{
+  "name": "News Intelligence Workspace API (Runnable Demo)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "news-intel-workspace",
+        "responseMode": "lastNode",
+        "options": {
+          "responseData": "firstEntryJson"
+        }
+      },
+      "id": "6820856b-2636-4905-9948-2abb895f7359",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "61dfdc45-cf01-40da-92a8-82ec6fe00af6",
+              "name": "topic",
+              "value": "={{ $json.body.topic || 'Untitled Topic' }}",
+              "type": "string"
+            },
+            {
+              "id": "8205c9cf-7a17-4a44-ac33-2c4c697d2352",
+              "name": "days",
+              "value": "={{ Number($json.body.days || 7) }}",
+              "type": "number"
+            },
+            {
+              "id": "b3b6880f-b2fc-421e-8bc7-338cf8c40140",
+              "name": "wiki",
+              "value": "={{ false }}",
+              "type": "boolean"
+            },
+            {
+              "id": "0c1e35c0-f6a3-4216-9587-7b84494f2b24",
+              "name": "provider",
+              "value": "n8n",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "bd4be18c-97aa-436a-a826-555c4e151ea0",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "7ed05566-246b-4826-a3d5-0922d5bbb971",
+              "name": "status",
+              "value": "ok",
+              "type": "string"
+            },
+            {
+              "id": "95398711-543f-4f6b-8d26-53d93eaf8d07",
+              "name": "topic",
+              "value": "={{ $json.topic }}",
+              "type": "string"
+            },
+            {
+              "id": "978a5f89-bb30-4271-ab48-48cd85226a00",
+              "name": "days",
+              "value": "={{ $json.days }}",
+              "type": "number"
+            },
+            {
+              "id": "bbe8b4f2-6ac6-4038-a69c-0bae8aeb97a8",
+              "name": "files",
+              "value": "={{ ({\n  \"run_brief.md\": `# Run Brief\n\n- Topic: ${$json.topic}\n- Date Window: Past ${$json.days} days ending ${new Date().toISOString().slice(0,10)}\n- Wiki: Off\n- Depth: Extensive\n- Scope: Auto-generated from the n8n demo workflow\n\n## Objectives\n- Identify major recent developments\n- Draft the markdown workspace\n- Prepare the final report structure\n`,\n  \"source_ledger.md\": `# Source Ledger\n\n## Topic\n${$json.topic}\n\n| Source | Date | Title | URL | Relevance |\n|---|---|---|---|---|\n|  |  |  |  |  |\n`,\n  \"article_registry.md\": `# Article Registry\n\n| Article ID | Date | Source | Title | Level | Cluster |\n|---|---|---|---|---|---|\n|  |  |  |  |  |  |\n`,\n  \"deduplication_log.md\": `# Deduplication Log\n\n- Deduplicate before escalating evidence.\n- Same event across multiple outlets should not be counted as multiple underlying events.\n`,\n  \"cluster_registry.md\": `# Cluster Registry\n\n| Cluster ID | Name | Description | Key Articles |\n|---|---|---|---|\n| C1 |  |  |  |\n| C2 |  |  |  |\n`,\n  \"temporal_dataset.md\": `# Temporal Dataset\n\n| Date | Count | Dominant Cluster | Notes |\n|---|---:|---|---|\n|  |  |  |  |\n`,\n  \"geospatial_dataset.md\": `# Geospatial Dataset\n\n| Location | Type | Cluster | Notes |\n|---|---|---|---|\n|  |  |  |  |\n`,\n  \"sentiment_analysis_memo.md\": `# Sentiment Analysis Memo\n\n## Topic\n${$json.topic}\n\n## Tone Shifts\n-\n`,\n  \"narrative_comparison_memo.md\": `# Narrative Comparison Memo\n\n## Agreements\n-\n\n## Divergences\n-\n`,\n  \"citation_index.md\": `# Citation Index\n\n| Claim | Cluster | Articles | Sources | Label |\n|---|---|---|---|---|\n|  |  |  |  | supported |\n`,\n  \"final_report.md\": `# Final Report\n\n## Topic\n${$json.topic}\n\n## Window\nPast ${$json.days} days ending ${new Date().toISOString().slice(0,10)}\n\n## Executive Summary\n-\n`\n}) }}",
+              "type": "object"
+            },
+            {
+              "id": "482244c6-a31f-49c4-beb1-f95a3b86d1c7",
+              "name": "meta",
+              "value": "={{ ({ provider: 'n8n', generated_at: new Date().toISOString() }) }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {
+          "dotNotation": false
+        }
+      },
+      "id": "43f6f146-ff36-4e7e-a45c-13ed58ff02ab",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        780,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "8ac2ff8b-39ce-42a3-b3a0-91e109e10841",
+  "tags": []
+}
