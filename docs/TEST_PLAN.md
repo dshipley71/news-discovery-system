@@ -1,132 +1,132 @@
-# UI-Executable Test Plan
+# UI-Executable Test Plan (Failure-Hardening)
 
-## 1) Test Philosophy
-Testing must mirror analyst-visible workflow stages and run entirely from the UI. No CLI dependence for analyst validation.
+## 1) Purpose
+Validate reliability of the Gradio analyst workflow against required failure modes, with clear warn/stop behavior and no silent failures.
 
-## 2) Test Layers
-1. **Stage validation tests** (per stage contract)
-2. **Workflow integration tests** (end-to-end run)
-3. **Quality behavior tests** (sparse/noisy/contradictory/spike cases)
-4. **Traceability tests** (claim-to-citation lineage)
-5. **Resilience tests** (partial source outages)
+## 2) Test Execution Principle
+All reliability tests must be executable and reviewable from the UI (or UI test console route), not dependent on analyst CLI usage.
 
-## 3) UI Test Console Requirements
-- Launch tests by stage or full workflow.
-- Select test profiles (normal load, sparse, noisy, contradictory, spike).
-- Display expected vs actual assertions.
-- Provide rerun with same inputs for reproducibility.
+## 3) Must-Test Failure Modes
+- duplicate article inflation
+- empty ingestion
+- schema drift
+- incorrect date parsing
+- broken UI state
+- incorrect geospatial inference
+- weak clustering
+- missing citations
+- misleading timeline spikes
 
-## 4) Stage-by-Stage Test Cases
-## T0 Intake
-- Input topic empty -> expect validation block.
-- Date window outside 1-30 -> expect validation block.
-- Valid input -> expect run manifest creation.
+## 4) Stage Visibility Assertions (Required for Every Test)
+For each stage result, assert UI displays:
+1. status badge (PASS/WARN/FAIL/PARTIAL),
+2. metric value and threshold,
+3. impacted artifacts,
+4. blocked actions,
+5. remediation guidance.
 
-## T1 Source Discovery
-- Mixed key/non-key sources configured -> expect source plan includes both classes.
-- Key source unavailable -> expect fallback and warning, not full failure.
+Any missing element is a test failure.
 
-## T2 Retrieval
-- Partial source timeout -> expect partial-success status and source-level errors logged.
-- All sources fail -> expect run failure with remediation guidance.
+## 5) Core Failure Injection Tests
 
-## T3 Normalization
-- Incomplete raw records -> expect flagging and schema completeness metrics.
-- Valid records -> expect canonical schema compliance.
-
-## T4 Geospatial Extraction
-- Explicit location mention in article -> expect populated city/region/country and coordinates.
-- Inferred-only location -> expect extraction_method=inferred with visible confidence.
-- Ambiguous place name -> expect ambiguity flag and notes.
-- Missing article linkage -> expect stage failure.
-
-## T5 Geospatial Aggregation
-- Multiple mentions of same location in one article -> unique article count increments once.
-- Nearby locations within configured radius -> grouped to shared location group.
-- Article with multiple distinct locations -> appears in multiple groups without duplicate inflation.
-
-## T6 Event Clustering
-- Thematically linked articles -> expect same event group with membership scores.
-- Unrelated articles -> expect separate clusters or unassigned bucket.
-- Cluster detail includes linked location group IDs.
-- Cluster summary table in Gradio -> expect one row per produced cluster_id with article_count and duplicate_ratio populated.
-- Selecting cluster_id in Gradio explorer -> expect cluster detail panel and article list to update for that cluster.
-- Duplicate-heavy detection -> if `duplicate_ratio >= 0.5`, expect `duplicate_heavy=true` in summary table and detail panel.
-- Source concentration visibility -> expect source-bias metric (`top_source_ratio`) present for each cluster.
-
-## T7 Temporal Analytics
-- Spike-like profile -> expect spike marker on timeline.
-- Sustained elevated profile -> expect sustained trend tag.
-
-## T8 Narrative Comparison
-- Conflicting source claims -> expect contradiction labeling with citations.
-- Consensus claims -> expect agreement labeling.
-
-## T9 Evidence Packaging
-- Every summary claim -> must map to citation(s).
-- Missing citation mapping -> expect blocking failure.
-- Geospatial claim -> must include location or location-group artifact link.
-- Citation explorer index -> expect counts by claim classification (`supported`, `inferred`, `speculative`) and source attribution.
-- Evidence bundle view -> expect explicit lineage rows with cluster ID, article ID, and citation ID.
-
-## T10 Report Composition
-- Missing required section -> expect publication block.
-- Complete sections -> expect export enabled.
-
-## T11 Critic Loop
-- Initial failed quality gate -> expect refinement iteration.
-- Reaching max iterations -> expect stop with unresolved issue summary.
-
-## 5) End-to-End Acceptance Tests
-### AT-1 Normal run
-- Valid topic, healthy source mix.
-- Expected: completed status, all mandatory outputs available.
-
-### AT-2 Sparse coverage run
-- Narrow topic/window likely to produce few items.
-- Expected: low-confidence labels and limitation notes.
-
-### AT-3 Contradiction-heavy run
-- Topic with disputed reporting.
-- Expected: contradiction matrix + unresolved claim handling.
-
-### AT-4 Breaking-news run
-- Active developing topic.
-- Expected: spike detection + developing-story warning.
-
-### AT-5 Geospatial inspection run
-- Topic with multi-location reporting.
-- Expected: map markers render; drill-down path works location → cluster → articles; ambiguity visible.
-
-### AT-6 Cluster and citation inspection run
-- Valid topic/date run with returned canonical articles.
+### FT-1 Duplicate Inflation
+- Inject near-duplicate syndicated set.
 - Expected:
-  - clusters visible and navigable from summary table and selector,
-  - citations traceable through citation index and citation records,
-  - evidence bundle rows link cluster/article/citation IDs correctly,
-  - duplicate-heavy clusters and source concentration are visible in UI.
+  - duplicate ratio warning/fail shown,
+  - timeline/cluster counts use unique article IDs,
+  - spike claims downgraded when duplicate-driven.
 
-## 6) Quality Gates
-A run can be marked production-ready only if:
-- Mandatory outputs exist (events, timeline, map, narrative, report).
-- Citation completeness threshold is met.
-- Critical validation failures are zero.
-- Critic loop either passes gates or exits at max iterations with explicit blockers.
-- Geospatial counts are deduplicated and traceable to article IDs.
+### FT-2 Empty Ingestion
+- Use topic/date profile returning no articles.
+- Expected:
+  - blocking `NO_DATA` state,
+  - source attempts visible,
+  - downstream stages not executed,
+  - guided rerun options offered.
 
-## 7) Evidence of Test Completion
-For each test execution, store:
-- Test run ID
-- Input profile
-- Assertion results
-- Artifact links
-- Timestamp and operator
+### FT-3 Schema Drift
+- Inject payload with renamed/missing canonical fields.
+- Expected:
+  - `SCHEMA_DRIFT` diagnostics with field diffs,
+  - invalid rows quarantined,
+  - fail if completeness below threshold.
 
-## 8) Assumptions
-- UI Test Console is available as a first-class route.
-- Test profiles can be injected/configured without code by analysts or admins.
+### FT-4 Date Parsing Failure
+- Inject mixed invalid/ambiguous date formats and timezone offsets.
+- Expected:
+  - invalid-date counts shown,
+  - invalid rows excluded from timeline,
+  - publish block when valid coverage below threshold.
 
-## 9) Open Decisions
-1. Production pass/fail thresholds for confidence and coverage.
-2. Frequency and ownership of regression test runs.
-3. Whether export validation includes downstream system compatibility checks.
+### FT-5 Broken UI State
+- Simulate stale run ID and interrupted callback state.
+- Expected:
+  - `STATE_DESYNC` warning,
+  - finalize/export controls disabled,
+  - resync/rebind flow available.
+
+### FT-6 Incorrect Geospatial Inference
+- Inject ambiguous place names with conflicting country context.
+- Expected:
+  - ambiguity and low-confidence markers shown,
+  - evidence spans visible,
+  - strong geo conclusions suppressed.
+
+### FT-7 Weak Clustering
+- Inject sparse/noisy thematic overlap.
+- Expected:
+  - weak-cluster flags visible,
+  - exploratory view allowed,
+  - publish-grade cluster claims blocked.
+
+### FT-8 Missing Citations
+- Inject report claims without citation links.
+- Expected:
+  - `CITATION_GAP` block,
+  - orphan claims listed,
+  - publish/export disabled.
+
+### FT-9 Misleading Timeline Spikes
+- Inject batch backfill or single-source syndication burst.
+- Expected:
+  - `SPIKE_ANOMALY` label,
+  - confidence reduced,
+  - narrative spike claim blocked unless corroborated.
+
+## 6) End-to-End Reliability Acceptance Tests
+
+### AT-R1 Healthy Run
+- Expected: no critical failures, all outputs present, full citation coverage.
+
+### AT-R2 Partial Outage Run
+- One source down, others healthy.
+- Expected: partial label + limitations disclosure; no false "all good" signal.
+
+### AT-R3 High-Risk Data Run
+- Combined duplicates + weak clusters + date noise.
+- Expected: warnings surfaced across stages; publish blocked if critical threshold crossed.
+
+### AT-R4 Publish Gate Enforcement
+- Attempt export with citation gap and unresolved critical issue.
+- Expected: hard block with explicit reason and remediation.
+
+## 7) Stop Conditions
+Test run is auto-failed if either condition occurs:
+- any critical failure is not surfaced in UI,
+- any publish/export action succeeds while critical rules are unresolved.
+
+## 8) Evidence to Capture per Test
+- test run ID,
+- input profile,
+- stage-by-stage status timeline,
+- screenshot or UI artifact references,
+- observed vs expected assertions,
+- operator and timestamp.
+
+## 9) Remaining Gaps
+1. Automated scenario generator for edge-case data profiles.
+2. Baseline gold datasets for cluster and geospatial quality scoring.
+3. Long-run soak tests for Gradio state consistency under repeated reruns.
+
+## 10) Recommended Next Step
+Add a dedicated "Failure Drill" panel in Gradio to launch FT-1..FT-9 profiles and export a structured validation report for each run.

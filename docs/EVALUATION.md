@@ -1,142 +1,91 @@
-# Evaluation Framework
+# Evaluation Framework (Reliability-Focused)
 
 ## 1) Purpose
-Define how to evaluate system quality, operational readiness, and analyst usefulness before and during implementation, with explicit safeguards against silent failures and misleading analytics.
+Evaluate whether the analyst-facing Gradio workflow is reliable, inspectable, and safe against high-impact failure modes.
 
-## 2) Evaluation Axes
-1. **Workflow completeness**
-2. **Evidence traceability**
-3. **Analytical quality**
-4. **Operational resilience**
-5. **Usability for non-technical analysts**
-6. **No-code/minimal-code compliance**
-7. **Determinism and reproducibility**
+## 2) Acceptance Criteria Mapping
+This framework enforces:
+- all major failure modes covered,
+- validation rules enforceable,
+- UI issues visible,
+- no silent failures.
 
-## 3) KPI Set
+## 3) Reliability Scorecard
+Score each axis 0-5 and convert to weighted total (0-100).
 
-## 3.1 Workflow KPIs
-- End-to-end completion rate
-- Stage failure rate by stage
-- Mean run time by date-window size
-- Contract error rate (UI request rejected by orchestrator)
+| Axis | Weight | What “good” looks like |
+|---|---:|---|
+| Failure-mode coverage | 20 | All required failure modes have detection + prevention + UI + fallback. |
+| Validation enforceability | 20 | Rules are machine-checkable and stage-gated (stop/warn). |
+| Analyst visibility | 20 | Analyst can see status, thresholds, impacted artifacts, next actions. |
+| Evidence traceability | 20 | Claims, clusters, maps, and spikes resolve to citations/artifacts. |
+| Operational resilience | 10 | Partial outages handled safely without false confidence. |
+| Determinism/reproducibility | 10 | Same input yields consistent stage outcomes. |
 
-## 3.2 Data and evidence KPIs
-- Citation completeness (% claims with valid citation)
-- Orphan claim count
-- Duplicate collapse precision/recall (when labeled sets available)
-- Timestamp validity rate
+Readiness bands:
+- **>= 85:** production-ready candidate
+- **70-84:** pilot-ready with tracked gaps
+- **< 70:** not ready
 
-## 3.3 Analytical KPIs
-- Event cluster cohesion score
-- Trend detection precision on benchmark scenarios
-- Spike integrity score (discounting syndication/batch artifacts)
-- Geospatial resolution confidence distribution
-- Contradiction detection coverage
+## 4) Required KPI Set
 
-## 3.4 User KPIs
-- Analyst time-to-first-insight
-- Task completion rate without admin help
-- Number of manual clarifications needed per run
-- Percentage of runs with fully actionable remediation hints
+### 4.1 Failure-mode KPIs
+- Duplicate inflation incidents detected before publish (%).
+- Empty-ingestion runs correctly blocked (%).
+- Schema drift detection precision (% correct drift alerts).
+- Date-parse invalid rate and out-of-range suppression correctness.
+- UI state desync detection rate.
+- Geospatial ambiguity disclosure rate.
+- Weak-cluster disclosure rate.
+- Orphan-claim (missing citation) rate.
+- Spike anomaly relabeling rate.
 
-## 3.5 Operational KPIs
-- Source outage tolerance (successful partial runs)
-- Retry effectiveness
-- Critic loop convergence rate within max iterations
-- Partial-run transparency rate (partial runs correctly labeled)
+### 4.2 Analyst-visibility KPIs
+- % WARN/FAIL events with remediation text.
+- % WARN/FAIL events with direct drill-down link.
+- Time-to-diagnose bad run from UI only.
 
-## 3.6 Determinism KPIs
-- Same-input rerun divergence rate
-- Stage output schema stability across reruns
-- Critical-threshold decision consistency (pass/warn/fail)
+### 4.3 Publish-safety KPIs
+- % publish attempts blocked when citation coverage < 100%.
+- % publish attempts blocked when critical rules fail.
+- False-safe rate (runs incorrectly allowed despite critical issues).
 
-## 4) Scoring Model
-Use weighted evaluation score (0-100):
-- Workflow completeness: 18
-- Evidence traceability: 24
-- Analytical quality: 22
-- Usability: 14
-- Resilience: 10
-- Determinism/reproducibility: 8
-- Minimal-code compliance: 4
+## 5) Stage Evaluation Checklist (Analyst Must See)
+For each stage, verify UI shows:
+1. Stage input summary.
+2. Pass/warn/fail outcome.
+3. Measured metrics vs thresholds.
+4. Affected artifact IDs.
+5. Recommended next action.
 
-Recommended readiness thresholds:
-- **>=85**: production-ready candidate
-- **70-84**: pilot-ready with tracked gaps
-- **<70**: design/implementation iteration required
+If any item is missing, mark stage as **visibility non-compliant**.
 
-## 5) Stage-Gate Reliability Checks
-A run is only publishable when all are true:
-1. No unresolved **Critical** failures.
-2. Claim-to-citation coverage is 100%.
-3. Timestamp validity and required schema completeness meet configured minimums.
-4. Partial-source conditions (if any) are visibly disclosed in output limitations.
-5. Timeline spikes are either corroborated or explicitly marked as low-confidence anomalies.
+## 6) Stop vs Warn Decision Audit
+Every decision must store:
+- rule ID,
+- measured value,
+- threshold,
+- status (warn/fail),
+- downstream actions blocked/unblocked,
+- timestamp and run ID.
 
-## 6) Critic Layer Decision Policy
+This is mandatory for post-run reliability audits.
 
-## 6.1 When to re-run workflow (or stage)
-Re-run is required when:
-- Critical validation checks fail and a known remediation path exists.
-- Output appears non-deterministic relative to same input profile.
-- Timeline or contradiction outputs fail evidence-link integrity checks.
+## 7) Risk Summary (Current)
+- Highest risk: silently misleading insights from duplicate inflation and spike artifacts.
+- Second highest risk: publishable reports with incomplete citations.
+- Third highest risk: Gradio UI state desync showing stale or incorrect run status.
 
-## 6.2 When to expand sources
-Source expansion is required when:
-- Cross-source coverage falls below contradiction/comparison minimum.
-- Single-source dominance causes low-confidence spike or narrative conclusions.
-- Repeated partial failures from the same subset of sources persist.
+## 8) Fix Summary (This Documentation Revision)
+- Added explicit failure-mode matrix with detection/prevention/UI/fallback.
+- Added enforceable thresholds and stop/warn criteria.
+- Added analyst-visibility requirements and UI non-compliance criteria.
+- Added publish-safety KPIs for no-silent-failure operation.
 
-## 6.3 When to reject results
-Reject (block publish) when:
-- Orphan claims remain.
-- Empty ingestion persists after allowed remediation attempts.
-- Broken UI→workflow contract means run metadata is incomplete/untrusted.
-- Critical date parsing/timeline integrity failures remain unresolved.
+## 9) Remaining Gaps
+1. Final threshold tuning from production telemetry.
+2. Automated UI-state checksum instrumentation.
+3. Benchmark datasets for geo ambiguity and clustering quality calibration.
 
-## 7) Observability Requirements (Analyst-Visible)
-
-## 7.1 What must be visible at each stage
-- Inputs consumed
-- Outputs produced
-- Validation rules executed with pass/warn/fail status
-- Metrics vs thresholds
-- Artifact IDs and lineage links
-- Suggested next action
-
-## 7.2 How to detect bad data quickly
-UI must provide:
-- Duplicate ratio and source concentration indicators
-- Invalid timestamp count and out-of-range date count
-- Source success/failure matrix
-- Claim-to-citation coverage counter
-- Unassigned article count for clustering stage
-
-## 7.3 How outputs trace to inputs
-- Every insight in timeline/map/narrative/report must resolve to artifact IDs.
-- Every claim must resolve to citation nodes and source records.
-- Every stage transition records actor, timestamp, and status decision.
-
-## 8) Evaluation Cadence
-- Pre-implementation design review against this framework.
-- Sprint-end reliability review (must include one failure-injection scenario).
-- Weekly regression review once workflow is operational.
-- Monthly critic-policy calibration using false-positive/false-negative samples.
-
-## 9) Failure Analysis Requirements
-Any failed gate must produce:
-- Root-cause summary
-- Impacted stages/artifacts
-- Proposed remediation
-- Owner and due date
-- Whether the issue is deterministic or intermittent
-
-## 10) Assumptions
-- Benchmark test profiles are maintained in UI Test Console.
-- Sufficient telemetry is captured at every stage.
-- Validation thresholds are centrally configurable by admin profile.
-
-## 11) Open Decisions
-1. Final numeric threshold tuning by business risk tolerance.
-2. Ownership model for ongoing evaluation governance.
-3. Whether strict mode should block publish for any partial-source run.
+## 10) Recommended Next Step
+Implement a lightweight "Validation Event Log" artifact (per stage) surfaced directly in Gradio so analysts and reviewers can inspect every rule decision without leaving the UI.
