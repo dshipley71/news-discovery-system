@@ -56,6 +56,13 @@ This repository defines and incrementally builds a real, production-capable, no-
 - Outputs must include timeline plots, maps, tables, citations, and a final report.
 - Every major stage must be inspectable and testable from the UI.
 
+## Operating mode for this repository
+- Treat documentation as the source of truth for system behavior until automation is implemented.
+- Prefer no-code orchestration platforms (workflow builders, connectors, schedulers, data prep tools) before introducing custom services.
+- Any unavoidable code must be small, isolated, and documented with clear reason for existence.
+- Every workflow stage must produce inspectable artifacts with IDs, timestamps, and provenance.
+- Every decision that affects analyst outputs must be reviewable in the UI.
+
 ## Change rules
 - Do not rewrite the whole repository when only a few files need to change.
 - Keep structure clear and durable.
