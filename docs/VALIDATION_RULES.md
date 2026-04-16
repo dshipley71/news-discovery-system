@@ -16,7 +16,7 @@ These defaults are starting values and must be environment-configurable.
 - Required canonical field completeness (`source`, `published_at`, `title_or_text_ref`): **>= 95% pass**, **90-94% warn**, **<90% fail**.
 - Valid publish timestamp coverage: **>= 95% pass**, **90-94% warn**, **<90% fail**.
 - Location traceability coverage (`location_id -> article_id -> evidence_span`): **100% required**.
-- Geospatial confidence visibility (records with shown confidence in UI): **100% required**.
+- Cluster traceability coverage (`cluster_id -> article_ids[] -> citation_ids[]`): **100% required for publishable outputs**.
 - Claim-to-citation coverage for publish: **100% required**.
 
 ## 4) Stage Rules
@@ -88,19 +88,23 @@ These defaults are starting values and must be environment-configurable.
 
 ## Stage 6: Event Clustering
 **Rules**
-- Every article assigned or explicitly unassigned.
-- Cluster cohesion above minimum score.
-- Cluster records include linked location groups when present.
+- Cluster schema fields required: `cluster_id`, `cluster_label`, `article_ids[]`, `source_diversity`, `cluster_confidence`.
+- No duplicate inflation: duplicate or near-duplicate article variants cannot increase cluster evidence counts.
+- Source attribution preserved: each clustered article must retain original source metadata.
+- Cluster minimum evidence: each cluster must meet configured minimum unique article count.
+- Weak cluster identification: clusters below confidence threshold are explicitly flagged.
 
 **Behavior**
-- One auto-rerun allowed with adjusted profile.
-- Fail if cohesion remains below threshold after rerun.
+- Fail when cluster schema is incomplete or source attribution is broken.
+- Fail when minimum evidence rule is violated for publishable clusters.
+- Warn (not fail) for weak clusters when exploratory output is allowed.
+- One auto-rerun allowed with adjusted profile before hard fail.
 
 ## Stage 7: Temporal Analytics
 **Rules**
 - Bucket totals equal valid timestamped record count.
 - Bucket timezone explicitly declared.
-- Spike/trend markers include supporting evidence IDs.
+- Spike/trend markers include supporting cluster IDs and evidence IDs.
 
 **Behavior**
 - Warn when low volume or low source diversity undermines confidence.
@@ -117,11 +121,17 @@ These defaults are starting values and must be environment-configurable.
 
 ## Stage 9: Evidence Packaging
 **Rules**
+- Citation schema fields required: `article_id`, `source`, `url`, `publication_date`, `claim_linkage[]`.
 - Every report claim maps to at least one citation.
-- Citation metadata completeness validated.
+- Evidence bundles must support all mandatory paths:
+  - `cluster -> supporting articles`
+  - `peak -> clusters -> articles`
+  - `location -> clusters -> articles`
 
 **Behavior**
 - Fail publish gate on any orphan claim.
+- Fail when mandatory citation fields are missing.
+- Fail when any required evidence-bundle edge is unresolved.
 
 ## Stage 10: Report Composition
 **Rules**
@@ -146,7 +156,8 @@ These defaults are starting values and must be environment-configurable.
 2. **Schema drift fallback:** map to canonical fallbacks; quarantine invalid records.
 3. **Temporal ambiguity fallback:** drop invalid timestamps from analytics and surface invalid-date count.
 4. **Geospatial resolver outage fallback:** continue with extraction-only artifacts and uncertainty warnings; suppress map-derived claims.
-5. **Narrative insufficiency fallback:** emit "insufficient evidence" instead of forced comparison.
+5. **Clustering insufficiency fallback:** retain unassigned/weak-cluster records as inspectable artifacts and block publish-grade cluster claims.
+6. **Citation incompleteness fallback:** allow internal review mode only; block publish/export mode.
 
 ## 6) Analyst-Facing Error Handling Requirements
 At every failed/warned stage, UI must show:
@@ -158,3 +169,4 @@ At every failed/warned stage, UI must show:
 ## 7) Assumptions
 - Thresholds are configurable in admin profile.
 - Stage artifacts persist enough metadata to compute all rules.
+- Duplicate detection signals are available before clustering confidence is finalized.

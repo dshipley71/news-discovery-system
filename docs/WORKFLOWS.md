@@ -83,23 +83,27 @@ One orchestrator executes the same stages as internal modules with identical sta
 
 ## Stage 6: Event Clustering
 - Inputs: canonical article records + geospatial aggregates
-- Outputs: event groups, membership scores, event summaries
+- Outputs: cluster set with `cluster_id`, `cluster_label`, `article_ids[]`, `source_diversity`, `cluster_confidence`
 - Validation rules:
   - Every article either assigned or explicitly unassigned
-  - Cluster cohesion above minimum threshold
-  - Cluster-to-location linkage is traceable
-- Stop conditions: insufficient cohesion => rerun with adjusted settings once
+  - Cluster must have minimum supporting evidence count
+  - Source diversity and cluster confidence are computed and logged
+  - Cluster-to-location linkage is traceable when geospatial signals exist
+- Stop conditions:
+  - Insufficient minimum evidence or severe duplication inflation => fail clustering stage
+  - Weak clusters may continue only if flagged for downstream caution labeling
 
 ## Stage 7: Temporal Analytics
-- Inputs: event groups + publish timestamps
-- Outputs: timeline series, peak/spike/trend detections
+- Inputs: cluster set + publish timestamps
+- Outputs: timeline series, peak/spike/trend detections, peak-to-cluster links
 - Validation rules:
   - Bucket integrity check
   - Detection thresholds logged
+  - Every peak links to one or more cluster IDs
 - Stop conditions: low volume => mark insights as low confidence, continue
 
 ## Stage 8: Narrative Comparison
-- Inputs: event groups, source metadata, extracted claims
+- Inputs: cluster set, source metadata, extracted claims
 - Outputs: narrative matrix (agreement/contradiction/unique)
 - Validation rules:
   - Claims mapped to supporting evidence
@@ -108,11 +112,17 @@ One orchestrator executes the same stages as internal modules with identical sta
 
 ## Stage 9: Evidence & Citation Packaging
 - Inputs: all prior stage outputs
-- Outputs: claim-evidence graph, citation appendix, evidence bundle index
+- Outputs:
+  - citation set (`article_id`, `source`, `url`, `publication_date`, `claim_linkage[]`)
+  - evidence bundle index with:
+    - `cluster -> supporting articles`
+    - `peak -> clusters -> articles`
+    - `location -> clusters -> articles`
 - Validation rules:
   - Every report claim has >=1 citation
   - Citation metadata completeness check
-- Stop conditions: unmapped claims exist => block report publication
+  - Evidence bundle link graph is complete and resolvable
+- Stop conditions: unmapped claims or broken bundle edges => block report publication
 
 ## Stage 10: Report Composition
 - Inputs: packaged evidence and analytical summaries
@@ -154,6 +164,7 @@ Every handoff must include:
 - Temporal consistency
 - Extraction certainty
 - Geospatial certainty (resolution confidence + ambiguity penalties)
+- Cluster coherence and source diversity
 - Contradiction pressure
 
 ## Source weighting rules
