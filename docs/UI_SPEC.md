@@ -1,172 +1,110 @@
-# UI Specification: Analyst-First Execution Surface
+# UI Specification: Analyst Dashboard (Gradio)
 
-## 1) UI Goals
-- Enable full workflow operation without CLI or coding.
-- Make each stage inspectable, testable, and rerunnable.
-- Preserve evidence traceability from visuals to raw sources.
+## Scope
+This document defines the current Gradio implementation surface for analyst execution. It reflects the existing workflow path (`ingestion -> normalization -> aggregation`) plus analyst-facing derived views (cluster/citation explorer and geospatial panel) generated only from real workflow outputs.
 
-## 2) Primary Screens
-## 2.1 Run Builder
-Purpose: Create a new analysis run with minimal inputs.
+## 1) Dashboard Layout
 
-Fields:
-- **Topic** (required)
-- **Date range length** (required, 1-30 days ending now)
-- **Advanced settings** (optional, collapsed)
+### 1.1 Top Control Panel
+Required controls:
+- `topic`
+- `start_date (YYYY-MM-DD)`
+- `end_date (YYYY-MM-DD)`
+- `Run Workflow` button
 
-Actions:
-- Validate inputs
-- Start run
-- Save reusable run profile
+Notes:
+- Input validation is hard-fail for empty topic, invalid date format, reversed date range, date range over 30 days, and future end date.
+- Dark analyst theme is default.
 
-## 2.2 Run Monitor
-Purpose: Observe stage execution and health in real time.
+### 1.2 Status / Run Summary Panel
+Shows:
+- workflow status text
+- run ID
+- run date range
+- article total
+- cluster total
+- location total
+- timeline trend summary
+- analyst warnings list for weak/partial outputs
 
-Elements:
-- Global run status and elapsed time
-- Stage list with statuses: pending/running/completed/partial/failed
-- Source ingestion summary (attempted/succeeded/failed)
-- Alert panel for policy or quality warnings
+### 1.3 Timeline Panel
+Contains:
+- daily article count plot
+- peak annotation(s)
+- trend summary text
 
-Actions:
-- Pause/cancel run (role-permitted)
-- Open stage detail
-- Rerun failed stage
+Behavior:
+- empty timeline state is explicitly rendered and called out in warnings.
 
-## 2.3 Stage Detail Panel
-Purpose: Inspect artifacts and validations for a single stage.
+### 1.4 Geospatial Panel
+Contains:
+- marker-based global map (Plotly `scatter_geo`)
+- marker table for analyst validation
 
-Must show:
-- Inputs consumed
-- Outputs generated
-- Validation checks and pass/fail results
-- Stopping condition results
-- Linked artifacts and evidence IDs
+Map semantics:
+- marker size: `article_count`
+- marker color/intensity: `low|medium|high`
+- uncertainty shown in hover and table
+- ambiguous location count shown in table
 
-Actions:
-- Approve and continue (if manual gate enabled)
-- Trigger bounded rerun
+Data behavior:
+- reads geospatial markers from workflow aggregation artifact when available
+- gracefully falls back to `No geospatial output returned` when absent
+- never fabricates location rows
 
-## 2.4 Analysis Workspace
-Purpose: Explore outputs by modality.
+### 1.5 Cluster Explorer Panel
+Contains:
+- cluster summary table
+- cluster selector dropdown
+- cluster detail JSON
+- article membership table per selected cluster
 
-Tabs:
-1. **Events Table** (clustered groups, counts, confidence)
-2. **Timeline** (article counts + detected peaks/spikes/trends)
-3. **Map** (geospatial mentions with confidence and density)
-4. **Narrative Compare** (source framing, agreements, contradictions)
-5. **Citations** (claim-to-evidence mapping)
+Cluster metrics surfaced:
+- article count
+- distinct source count
+- duplicate count and ratio
+- top-source ratio
+- duplicate-heavy boolean flag
 
-### 2.4.1 Cluster and Citation Explorer (Current Gradio Surface)
-The Gradio app includes a dedicated explorer section immediately after aggregation output. It must remain simple and analyst-readable.
+### 1.6 Citation / Evidence Panel
+Contains:
+- citation index JSON (counts by source + claim classification)
+- citation records table
+- evidence bundle table (`cluster -> article -> citation`)
 
-Required components:
-- **Cluster Summary Table**
-  - Columns: `cluster_id`, `cluster_label`, `article_count`, `distinct_sources`, `duplicate_articles`, `duplicate_ratio`, `top_source_ratio`, `duplicate_heavy`.
-  - Enables quick detection of duplicate-heavy clusters and source concentration bias.
-- **Cluster Detail Panel**
-  - Shows selected cluster metadata including duplicate-heavy status and source-bias metrics.
-- **Article List per Cluster**
-  - Lists article IDs, titles, source attribution, publication timestamp, duplicate flag, and URL.
-- **Citation Index**
-  - Displays citation totals, source distribution, and claim classification counts:
-    - `supported`
-    - `inferred`
-    - `speculative`
-- **Evidence Bundle View**
-  - Displays explicit `bundle_id -> cluster_id -> article_id -> citation_id` links for UI-level lineage inspection.
+Claim classification handling:
+- uses upstream `claim_classification` when present
+- otherwise derives from available article metadata (`supported|inferred|speculative`) to keep output explicitly labeled
 
-Interaction model:
-1. Run workflow from topic/date inputs.
-2. Review cluster summary table.
-3. Select cluster ID from dropdown.
-4. Inspect cluster detail and cluster article list.
-5. Verify citation and evidence-bundle records for traceability.
+### 1.7 Validation / Raw Output Panel
+Accordion keeps full stage outputs inspectable:
+- run metadata
+- ingestion output
+- normalization output
+- aggregation output
 
-## 2.5 Report Viewer and Export
-Purpose: Review final report and export evidence package.
+## 2) Warning and Error Handling
+The dashboard must visibly warn for:
+- empty ingestion
+- normalization invalid records
+- missing timeline data
+- missing geospatial output
+- missing cluster output
+- missing citation output
+- speculative citation volume
+- duplicate-heavy clusters
 
-Must support:
-- Section-level expand/collapse
-- Inline citations clickable to evidence items
-- Export options (PDF/HTML/JSON evidence bundle)
+Execution failures produce:
+- failed status message
+- run summary warning block
+- empty timeline/map visuals with explicit no-data message
 
-## 2.6 Test Console (UI)
-Purpose: Execute step-by-step workflow tests from UI.
+## 3) Colab and Browser Compatibility
+- App launch remains `demo.launch(..., share=True)`.
+- UI is fully executable from browser/Colab link without CLI interaction by analysts.
+- Layout uses core Gradio components supported in Colab notebooks.
 
-Must support:
-- Stage test catalog
-- Test data profile selection
-- Assertions view (expected vs actual)
-- Reproducible test run history
-
-## 3) Interaction Model
-- Default flow is fully automated after run start.
-- Optional manual checkpoints can be enabled by admin for high-risk deployments.
-- Every chart/table row must support drill-down to evidence.
-
-## 4) Visualization Requirements
-## 4.1 Timeline
-- Daily bins minimum, optionally hourly for short windows.
-- Overlay markers for peaks/spikes/trends.
-- Hover shows underlying article IDs and source mix.
-
-## 4.2 Map (Gradio Integration)
-The map is an inspectable output panel backed by geospatial artifacts.
-
-### Map Output Panel Requirements
-- Render marker-based visualization from the Geospatial Map Marker Set artifact.
-- Marker size encodes unique article count.
-- Marker color encodes intensity (low/medium/high).
-- Marker tooltip must show: location label, article count, average confidence, ambiguous-location count.
-- Map legend must define:
-  - size-to-count buckets,
-  - color-to-intensity buckets,
-  - uncertainty symbol for ambiguous locations.
-
-### Map Controls
-- Confidence threshold filter.
-- Source filter.
-- Date range filter.
-- Cluster filter.
-- Ambiguity-only toggle.
-
-### Required Click-through Behavior
-1. Click **location marker** → open location drawer with location group ID and metrics.
-2. Click linked **cluster ID** in drawer → open cluster detail table.
-3. Click **article ID** in cluster table → open article evidence/citation panel.
-
-This enforces the drill path: **location → cluster → articles**.
-
-## 4.3 Tables
-- Sort/filter/export for events, articles, sources, and contradictions.
-- Confidence and source-weight columns mandatory.
-
-## 5) Validation UX
-- Each stage includes a validation card with:
-  - Rules executed
-  - Failures/warnings
-  - Suggested remediation options
-- Critic loop outcomes are visible with iteration count and deltas.
-- Geospatial validation card must include ambiguity and deduplicated count metrics.
-
-## 6) Accessibility and Usability
-- Keyboard navigable core actions.
-- Color-safe encodings for confidence and status.
-- Plain-language labels for non-technical analysts.
-
-## 7) Auditability in UI
-- Immutable run timeline panel with timestamped actions.
-- “Why this output?” affordance on generated insights.
-- Downloadable audit log per run.
-- For map markers, “Why this location?” must show evidence text span and extraction method.
-- For cluster explorer, every cluster row must resolve to article and citation identifiers without hidden joins.
-
-## 8) Assumptions
-- Interactive charting and mapping components are available in selected UI stack.
-- Authentication/authorization layer exists in hosting environment.
-
-## 9) Open Decisions
-1. Single-page vs multi-page application layout.
-2. Real-time transport model (polling vs push events).
-3. Manual-gate default policy for production deployments.
+## 4) Traceability Requirements (Current UI)
+- Timeline, map, cluster, citation, and evidence panels must be generated from the same workflow run payload.
+- Analyst can validate every summarized panel against raw outputs in the validation accordion.
+- No simulated clusters/citations/geospatial markers are allowed.

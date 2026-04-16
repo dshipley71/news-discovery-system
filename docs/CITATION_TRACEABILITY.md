@@ -1,59 +1,54 @@
-# Citation Traceability Specification
+# Citation Traceability Specification (Current Dashboard)
 
 ## 1) Purpose
-Define the canonical citation model and deterministic linkage rules so every analytical claim, cluster insight, map/location insight, and timeline peak can be traced to real retrieved articles.
+Define how the Gradio analyst dashboard exposes citation/evidence linkage from real workflow outputs.
 
-## 2) Scope
-This specification governs:
-- citation records created from normalized article data,
-- claim-to-evidence linkage,
-- cluster/peak/location evidence bundle linkage,
-- publication gates for citation completeness.
+## 2) Source of Truth
+Citation records in current UI are derived from `normalization.canonical_articles[]` within a single run payload.
 
-No simulated citations are permitted. Every citation record must originate from a retrieved and normalized article artifact.
+No simulated citation entries are allowed.
 
-## 3) Canonical Citation Schema
-Each citation record MUST include:
-- `citation_id` (stable ID)
-- `article_id` (foreign key to canonical article)
-- `source` (publisher/source name)
-- `url` (canonical or resolved source URL)
-- `publication_date` (ISO-8601 date/time from source metadata)
-- `claim_linkage[]` (list of claim IDs this article supports/challenges)
+## 3) Citation Record Fields (Current UI)
+Each citation row includes:
+- `citation_id`
+- `article_id`
+- `cluster_id`
+- `source`
+- `publication_date`
+- `url` (nullable when unavailable)
+- `claim_classification` (`supported|inferred|speculative`)
+- `duplicate_flag`
 
-Recommended metadata fields:
-- `retrieved_at`
-- `source_record_id` (provider-native ID when available)
-- `excerpt_ref` (text span pointer or content hash)
-- `stance` (`supports` | `contradicts` | `context`)
-- `confidence_contribution`
+Classification behavior:
+- use upstream `claim_classification` when present,
+- else derive deterministically from available metadata so analysts can distinguish evidence confidence levels.
 
-## 4) Claim Linkage Rules
-1. `claim_linkage[]` cannot be empty for citations included in publishable outputs.
-2. Every `claim_id` in `claim_linkage[]` must resolve to a claim node in the current run.
-3. Claim-level statements in reports must reference one or more citation IDs.
-4. Contradiction claims require at least two independent citations from distinct sources.
-5. Removing a citation from a claim requires re-validation of claim confidence and publication gate status.
+## 4) Evidence Bundle Linkage
+The UI emits evidence bundle rows for analyst drill-down:
+- `bundle_id`
+- `bundle_type` (`cluster_support` in current implementation)
+- `bundle_subject_id` (cluster ID)
+- `article_id`
+- `citation_id`
+- `source`
 
-## 5) Traceability Paths (Required)
-The system must support these drill paths end-to-end:
-- `claim -> citation_id -> article_id -> raw retrieval metadata`
-- `cluster_id -> article_ids[] -> citation_ids[]`
-- `peak_id -> cluster_ids[] -> article_ids[] -> citation_ids[]`
-- `location_group_id -> cluster_ids[] -> article_ids[] -> citation_ids[]`
+This provides explicit UI-level lineage for cluster-level inspection.
 
-If any path segment is broken, mark the dependent insight as non-publishable.
+## 5) Required Analyst Drill Paths (Current)
+Supported paths:
+1. `cluster_id -> cluster article membership -> article_id`
+2. `cluster_id -> citation rows -> citation_id -> article_id`
+3. `citation index counts -> citation row verification`
 
-## 6) Citation Completeness Gates
-- **Pass:** 100% of publishable claims resolve to >=1 valid citation.
-- **Warn:** internal exploratory views may show partial linkage, but must be visibly labeled non-publishable.
-- **Fail:** any publish attempt with orphan claims (claim without citation) is blocked.
+When data is unavailable, UI must show explicit empty/no-data state rather than hidden failure.
 
-## 7) Assumptions
-- Canonical article IDs are immutable within a run.
-- Source metadata includes either a direct URL or a resolvable locator.
-- Claim nodes are versioned and auditable.
+## 6) Publication Readiness Signal (UI)
+The run summary warning area should flag:
+- missing citation output,
+- speculative citation counts,
+- duplicate-heavy clusters that can weaken claim confidence.
 
-## 8) Open Decisions
-1. Exact storage strategy for `excerpt_ref` (inline snippet vs external object store pointer).
-2. Whether citation style formatting (APA/Chicago/etc.) is generated at export time or persisted as artifact fields.
+These warnings are advisory for analyst review and do not yet implement a hard publish gate.
+
+## 7) Next Improvement
+Promote `claim_linkage[]` to a first-class workflow artifact so dashboard citations can resolve from claim statement -> citation -> article deterministically without UI-only derivation.
