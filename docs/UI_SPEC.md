@@ -57,6 +57,32 @@ Tabs:
 4. **Narrative Compare** (source framing, agreements, contradictions)
 5. **Citations** (claim-to-evidence mapping)
 
+### 2.4.1 Cluster and Citation Explorer (Current Gradio Surface)
+The Gradio app includes a dedicated explorer section immediately after aggregation output. It must remain simple and analyst-readable.
+
+Required components:
+- **Cluster Summary Table**
+  - Columns: `cluster_id`, `cluster_label`, `article_count`, `distinct_sources`, `duplicate_articles`, `duplicate_ratio`, `top_source_ratio`, `duplicate_heavy`.
+  - Enables quick detection of duplicate-heavy clusters and source concentration bias.
+- **Cluster Detail Panel**
+  - Shows selected cluster metadata including duplicate-heavy status and source-bias metrics.
+- **Article List per Cluster**
+  - Lists article IDs, titles, source attribution, publication timestamp, duplicate flag, and URL.
+- **Citation Index**
+  - Displays citation totals, source distribution, and claim classification counts:
+    - `supported`
+    - `inferred`
+    - `speculative`
+- **Evidence Bundle View**
+  - Displays explicit `bundle_id -> cluster_id -> article_id -> citation_id` links for UI-level lineage inspection.
+
+Interaction model:
+1. Run workflow from topic/date inputs.
+2. Review cluster summary table.
+3. Select cluster ID from dropdown.
+4. Inspect cluster detail and cluster article list.
+5. Verify citation and evidence-bundle records for traceability.
+
 ## 2.5 Report Viewer and Export
 Purpose: Review final report and export evidence package.
 
@@ -134,6 +160,7 @@ This enforces the drill path: **location → cluster → articles**.
 - “Why this output?” affordance on generated insights.
 - Downloadable audit log per run.
 - For map markers, “Why this location?” must show evidence text span and extraction method.
+- For cluster explorer, every cluster row must resolve to article and citation identifiers without hidden joins.
 
 ## 8) Assumptions
 - Interactive charting and mapping components are available in selected UI stack.

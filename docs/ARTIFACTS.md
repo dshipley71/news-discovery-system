@@ -48,8 +48,11 @@ Required fields:
 - `cluster_id`
 - `cluster_label`
 - `article_ids[]`
+- `article_membership[]` (article-level membership rows with at minimum `article_id`, `source`, `duplicate_flag`)
 - `source_diversity` (count and/or normalized score across independent sources)
 - `cluster_confidence` (bounded numeric score)
+- `duplicate_ratio`
+- `duplicate_heavy` (boolean threshold flag for analyst triage)
 
 Recommended fields:
 - `unassigned_reason` (if cluster is fallback/weak)
@@ -65,6 +68,7 @@ Required fields:
 - `url`
 - `publication_date`
 - `claim_linkage[]`
+- `claim_classification` (`supported` | `inferred` | `speculative`)
 
 Recommended fields:
 - `retrieved_at`
@@ -81,12 +85,14 @@ Required fields:
 - `article_ids[]`
 - `citation_ids[]`
 - `created_at`
+- `source_attribution[]`
 
 ## 5) Evidence Bundle Relationship Requirements
 The pipeline must produce explicit, queryable relationships for:
 - `cluster -> supporting articles`
 - `peak -> clusters -> articles`
 - `location -> clusters -> articles`
+- `cluster -> citations -> claim classifications`
 
 Each relationship layer must be materialized in artifacts (not inferred only at render time) so UI and export packages can audit lineage deterministically.
 
