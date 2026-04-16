@@ -1,0 +1,1 @@
+"""News Discovery MVP package."""
