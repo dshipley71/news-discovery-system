@@ -1,75 +1,32 @@
-# EVIDENCE_REPORTING.md
+# OPTIONAL_WIKI.md
 
-## Evidence Levels
+## Status
+Optional. Off by default.
 
-### Level 1 — Reference
-Store:
-- URL
-- title
-- source
-- date
-- short excerpt
+## Only activate when a user explicitly requests:
+- a wiki
+- persistent topic pages
+- cumulative tracking
+- cross-run memory
+- knowledge base updates
 
-### Level 2 — Snapshot
-Store:
-- structured summary
-- key claims
-- entities
-- sentiment
-- cluster ID
+## Purpose
+The wiki layer converts validated run outputs into durable pages:
+- topic pages
+- entity pages
+- event pages
+- timeline pages
+- run summary pages
 
-### Level 3 — Full Content
-Store selectively:
-- full article text or extended excerpt
-- metadata
-- justification
+## Rules
+- do not use silently
+- do not overwrite prior knowledge without change tracking
+- preserve citations and uncertainty
+- run lint checks on the wiki layer when it is used
 
-## Evidence Rules
-- deduplicate before escalation
-- only cluster-relevant items move beyond Level 1
-- only top-value items should reach Level 3
-- full-content retention must be justified
+## Difference from the Main System
+Main system:
+- answers what happened in this run
 
-## Required Artifacts
-- run_brief.md
-- source_ledger.md
-- article_registry.md
-- deduplication_log.md
-- cluster_registry.md
-- temporal_dataset.md
-- geospatial_dataset.md
-- sentiment_analysis_memo.md
-- narrative_comparison_memo.md
-- citation_index.md
-- final_report.md
-
-## Reporting Requirements
-The final report should include:
-- topic
-- date window
-- source summary
-- timeline interpretation
-- peak analysis
-- trend analysis
-- geospatial insights
-- sentiment analysis
-- narrative comparison
-- limitations
-- citation appendix
-
-## Citation Rules
-All major claims must map:
-claim → cluster → article(s) → source(s)
-
-Labels:
-- supported
-- inferred
-- speculative
-
-## Limitations
-Always disclose:
-- sparse coverage
-- source dominance
-- syndication inflation
-- uncertainty
-- unresolved conflicts
+Optional wiki:
+- answers what is known overall across runs

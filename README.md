@@ -1,32 +1,21 @@
-# OPTIONAL_WIKI.md
+# News Intelligence Pattern — Consolidated Edition
 
-## Status
-Optional. Off by default.
+This is the consolidated version of the no-source-code news intelligence pattern.
 
-## Only activate when a user explicitly requests:
-- a wiki
-- persistent topic pages
-- cumulative tracking
-- cross-run memory
-- knowledge base updates
+## Why this version exists
+The earlier version used too many markdown files. This edition collapses the system into a smaller, easier-to-manage structure.
 
-## Purpose
-The wiki layer converts validated run outputs into durable pages:
-- topic pages
-- entity pages
-- event pages
-- timeline pages
-- run summary pages
+## Main files
+- `README.md`
+- `SYSTEM.md`
+- `ANALYSIS.md`
+- `EVIDENCE_REPORTING.md`
+- `OPTIONAL_WIKI.md`
 
-## Rules
-- do not use silently
-- do not overwrite prior knowledge without change tracking
-- preserve citations and uncertainty
-- run lint checks on the wiki layer when it is used
+## Rule
+Use the main system by default.
+Use the wiki layer only when a user explicitly requests persistent knowledge pages or cross-run memory.
 
-## Difference from the Main System
-Main system:
-- answers what happened in this run
-
-Optional wiki:
-- answers what is known overall across runs
+## Included extras
+- UI files in `ui/`
+- n8n workflow export in `automation/`

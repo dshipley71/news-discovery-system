@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>News Intelligence Workspace · n8n Workflow Added</title>
+  <title>News Intelligence Workspace · Webhook Connected</title>
   <style>
     :root{
-      --bg:#08101b; --panel:#111b31; --panel2:#16223e; --line:#263658;
+      --bg:#08101b; --bg2:#0d1526; --panel:#111b31; --panel2:#16223e; --line:#263658;
       --text:#e9f0ff; --muted:#8fa4cb; --accent:#5fb2ff; --accent2:#8b5cf6;
-      --ok:#2dd4bf; --warn:#f59e0b; --bad:#ef4444; --radius:18px; --shadow:0 18px 44px rgba(0,0,0,.34);
+      --success:#2dd4bf; --warn:#f59e0b; --danger:#ef4444; --radius:18px; --shadow:0 18px 44px rgba(0,0,0,.34);
     }
     *{box-sizing:border-box}
     html,body{margin:0;height:100%}
@@ -21,46 +21,82 @@
       color:var(--text);
     }
     .app{display:grid;grid-template-columns:320px 1fr;min-height:100vh}
-    .sidebar{background:rgba(9,14,27,.84);backdrop-filter:blur(14px);border-right:1px solid var(--line);padding:22px 18px;position:sticky;top:0;height:100vh;overflow:auto}
-    .brand{display:flex;gap:12px;align-items:center;background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));border:1px solid var(--line);border-radius:16px;padding:12px;box-shadow:var(--shadow);margin-bottom:18px}
-    .logo{width:42px;height:42px;border-radius:14px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:grid;place-items:center;font-weight:800}
-    .brand h1{font-size:15px;margin:0}.brand p{margin:4px 0 0;color:var(--muted);font-size:12px}
+    .sidebar{
+      background:rgba(9,14,27,.84);backdrop-filter:blur(14px);border-right:1px solid var(--line);
+      padding:22px 18px;position:sticky;top:0;height:100vh;overflow:auto;
+    }
+    .brand{
+      display:flex;gap:12px;align-items:center;background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+      border:1px solid var(--line);border-radius:16px;padding:12px;box-shadow:var(--shadow);margin-bottom:18px;
+    }
+    .logo{
+      width:42px;height:42px;border-radius:14px;background:linear-gradient(135deg,var(--accent),var(--accent2));
+      display:grid;place-items:center;font-weight:800;letter-spacing:.04em
+    }
+    .brand h1{font-size:15px;margin:0}
+    .brand p{margin:4px 0 0;color:var(--muted);font-size:12px}
     .section-title{margin:16px 8px 8px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
-    .field{margin-bottom:12px}.label{font-size:12px;color:var(--muted);margin-bottom:6px;display:block}
-    input, select, textarea{width:100%;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:14px;padding:12px 13px;outline:none;font:inherit}
+    .field{margin-bottom:12px}
+    .label{font-size:12px;color:var(--muted);margin-bottom:6px;display:block}
+    input, select, textarea{
+      width:100%;background:var(--panel);color:var(--text);border:1px solid var(--line);
+      border-radius:14px;padding:12px 13px;outline:none;font:inherit;
+    }
     textarea{min-height:420px;resize:vertical;line-height:1.5;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:13px;background:#0c1426}
-    .btn{width:100%;border:0;border-radius:14px;padding:12px 14px;font-weight:700;color:white;cursor:pointer;background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 14px 26px rgba(95,178,255,.24);margin-top:6px}
+    .btn{
+      width:100%;border:0;border-radius:14px;padding:12px 14px;font-weight:700;color:white;cursor:pointer;
+      background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 14px 26px rgba(95,178,255,.24);margin-top:6px;
+    }
     .btn.secondary{background:var(--panel2);border:1px solid var(--line);box-shadow:none}
     .btn-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+    .chip-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+    .chip{background:#182541;border:1px solid var(--line);color:var(--text);font-size:12px;padding:6px 10px;border-radius:999px}
     .nav{display:grid;gap:6px;margin-top:8px}
-    .nav button{text-align:left;width:100%;background:transparent;border:1px solid transparent;color:var(--text);padding:11px 12px;border-radius:13px;cursor:pointer}
+    .nav button{
+      text-align:left;width:100%;background:transparent;border:1px solid transparent;color:var(--text);padding:11px 12px;border-radius:13px;cursor:pointer;
+    }
     .nav button.active,.nav button:hover{background:linear-gradient(180deg, rgba(95,178,255,.12), rgba(95,178,255,.04));border-color:var(--line)}
-    .chip-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.chip{background:#182541;border:1px solid var(--line);color:var(--text);font-size:12px;padding:6px 10px;border-radius:999px}
-    .main{padding:24px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:18px}
-    .title h2{margin:0;font-size:28px}.title p{margin:6px 0 0;color:var(--muted)}
-    .status{display:flex;gap:10px;flex-wrap:wrap}.pill{background:rgba(255,255,255,.03);border:1px solid var(--line);padding:8px 10px;border-radius:999px;font-size:12px;color:var(--muted)}
+    .tiny{font-size:12px;color:var(--muted)}
+    .main{padding:24px}
+    .topbar{display:flex;justify-content:space-between;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:18px}
+    .title h2{margin:0;font-size:28px}
+    .title p{margin:6px 0 0;color:var(--muted)}
+    .status{display:flex;gap:10px;flex-wrap:wrap}
+    .pill{background:rgba(255,255,255,.03);border:1px solid var(--line);padding:8px 10px;border-radius:999px;font-size:12px;color:var(--muted)}
     .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:18px}
-    .card{background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.015));border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
-    .span-4{grid-column:span 4}.span-5{grid-column:span 5}.span-6{grid-column:span 6}.span-7{grid-column:span 7}.span-8{grid-column:span 8}.span-12{grid-column:span 12}
-    .card-head{padding:16px 18px 0;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}.card-head h3{margin:0;font-size:17px}
-    .card-body{padding:18px}.helper,.tiny{font-size:12px;color:var(--muted)}
-    .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.kpi{padding:14px;border-radius:16px;background:var(--panel);border:1px solid var(--line)} .kpi .label{margin:0}.kpi b{display:block;font-size:23px;margin-top:6px}
-    .steps,.nodes{display:grid;gap:10px}
-    .step,.node{display:grid;grid-template-columns:40px 1fr;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:12px}
-    .step .n,.node .n{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--accent2))}
+    .card{
+      background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.015));
+      border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;
+    }
+    .span-4{grid-column:span 4}.span-5{grid-column:span 5}.span-7{grid-column:span 7}.span-8{grid-column:span 8}.span-12{grid-column:span 12}
+    .card-head{padding:16px 18px 0;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}
+    .card-head h3{margin:0;font-size:17px}
+    .card-body{padding:18px}
+    .helper{font-size:12px;color:var(--muted)}
+    .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+    .kpi{padding:14px;border-radius:16px;background:var(--panel);border:1px solid var(--line)}
+    .kpi .label{margin:0}.kpi b{display:block;font-size:23px;margin-top:6px}
+    .steps{display:grid;gap:10px}
+    .step{display:grid;grid-template-columns:40px 1fr;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:12px}
+    .step .n{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--accent2))}
     .editor-toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
-    .editor-toolbar button{background:var(--panel);border:1px solid var(--line);color:var(--text);padding:10px 12px;border-radius:12px;cursor:pointer;font-size:12px}
-    .filelist{display:grid;gap:10px;max-height:420px;overflow:auto}
+    .editor-toolbar button{
+      background:var(--panel);border:1px solid var(--line);color:var(--text);padding:10px 12px;border-radius:12px;cursor:pointer;font-size:12px;
+    }
+    .filelist{display:grid;gap:10px;max-height:460px;overflow:auto}
     .fileitem{border:1px solid var(--line);background:var(--panel);border-radius:14px;padding:12px;cursor:pointer}
     .fileitem.active{outline:1px solid rgba(95,178,255,.45);background:#15223e}.fileitem b{display:block;margin-bottom:6px}
-    pre{margin:0;background:#0c1426;border:1px solid var(--line);border-radius:14px;padding:12px;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:12px;color:#dce8ff}
+    pre{
+      margin:0;background:#0c1426;border:1px solid var(--line);border-radius:14px;padding:12px;white-space:pre-wrap;word-break:break-word;
+      font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:12px;color:#dce8ff;
+    }
     .notice{padding:12px 14px;border-radius:14px;background:rgba(45,212,191,.08);border:1px solid rgba(45,212,191,.20);color:#b6fff1}
     .notice.warn{background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.18);color:#ffe2a4}
     .notice.bad{background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.18);color:#ffc6c6}
-    .workflow-box{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px}
-    ul{margin:8px 0 0 18px}
-    code{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
-    @media (max-width:1180px){.app{grid-template-columns:1fr}.sidebar{position:relative;height:auto}.span-4,.span-5,.span-6,.span-7,.span-8,.span-12{grid-column:span 12}.kpis{grid-template-columns:repeat(2,1fr)}}
+    @media (max-width: 1180px){
+      .app{grid-template-columns:1fr}.sidebar{position:relative;height:auto}
+      .span-4,.span-5,.span-7,.span-8,.span-12{grid-column:span 12}.kpis{grid-template-columns:repeat(2,1fr)}
+    }
   </style>
 </head>
 <body>
@@ -69,8 +105,8 @@
     <div class="brand">
       <div class="logo">NI</div>
       <div>
-        <h1>n8n-Ready Workspace</h1>
-        <p>UI with embedded no-code workflow blueprint</p>
+        <h1>Webhook-Connected Workspace</h1>
+        <p>Topic + days in, markdown artifacts back</p>
       </div>
     </div>
 
@@ -89,16 +125,27 @@
         <option value="30">30 days</option>
       </select>
     </div>
+
+    <div class="section-title">Orchestration</div>
+    <div class="field">
+      <label class="label">Provider</label>
+      <select id="providerInput">
+        <option value="n8n" selected>n8n</option>
+        <option value="make">Make</option>
+        <option value="zapier">Zapier</option>
+        <option value="custom">Custom Webhook</option>
+      </select>
+    </div>
     <div class="field">
       <label class="label">Webhook URL</label>
-      <input id="webhookUrlInput" placeholder="https://your-n8n-webhook-url" />
+      <input id="webhookUrlInput" placeholder="https://your-webhook-endpoint" />
     </div>
     <div class="field">
       <label class="label">Auth Token (optional)</label>
       <input id="authTokenInput" placeholder="Bearer token or custom token" />
     </div>
 
-    <button class="btn" id="runBtn">Run n8n Workflow</button>
+    <button class="btn" id="runBtn">Run Orchestration</button>
     <div class="btn-row">
       <button class="btn secondary" id="generateLocalBtn">Generate Local Draft</button>
       <button class="btn secondary" id="resetBtn">Reset</button>
@@ -111,10 +158,10 @@
     <div class="section-title">Workspace Files</div>
     <div class="nav" id="fileNav"></div>
 
-    <div class="section-title">Flags</div>
+    <div class="section-title">Run Flags</div>
     <div class="chip-row">
       <span class="chip">Wiki Off</span>
-      <span class="chip">n8n Flow Embedded</span>
+      <span class="chip">Webhook Mode</span>
       <span class="chip">HTML + JS Only</span>
     </div>
   </aside>
@@ -123,73 +170,66 @@
     <div class="topbar">
       <div class="title">
         <h2 id="heroTitle">Agent Workspace</h2>
-        <p>This UI now includes the actual no-code workflow design inside the interface, so the operator can configure the webhook and follow the exact n8n node sequence.</p>
+        <p>The UI sends only topic, days, and run options to a no-code orchestration layer, then renders returned markdown artifacts for review and editing.</p>
       </div>
       <div class="status">
         <span class="pill" id="statusTopic">Topic: Strait of Hormuz</span>
         <span class="pill" id="statusDays">Window: 7 days</span>
-        <span class="pill">Provider: n8n</span>
+        <span class="pill" id="statusProvider">Provider: n8n</span>
       </div>
     </div>
 
     <section class="grid">
       <div class="card span-12">
-        <div class="card-head"><h3>Operator Model</h3><span class="helper">Two inputs in, generated markdown out</span></div>
+        <div class="card-head">
+          <h3>Operator Model</h3>
+          <span class="helper">Only two required user inputs</span>
+        </div>
         <div class="card-body">
           <div class="kpis">
             <div class="kpi"><span class="label">Required Inputs</span><b>2</b></div>
             <div class="kpi"><span class="label">Workspace Files</span><b id="kpiFiles">11</b></div>
-            <div class="kpi"><span class="label">Workflow Nodes</span><b>6</b></div>
+            <div class="kpi"><span class="label">Webhook Mode</span><b>On</b></div>
             <div class="kpi"><span class="label">Wiki Layer</span><b>Off</b></div>
           </div>
         </div>
       </div>
 
       <div class="card span-4">
-        <div class="card-head"><h3>Workflow Steps</h3><span class="helper">Operator view</span></div>
+        <div class="card-head">
+          <h3>How the handoff works</h3>
+          <span class="helper">No-code orchestration endpoint</span>
+        </div>
         <div class="card-body">
           <div class="steps">
-            <div class="step"><div class="n">1</div><div><strong>Enter topic + days</strong><div class="tiny">The user supplies only the subject and time window.</div></div></div>
-            <div class="step"><div class="n">2</div><div><strong>POST to webhook</strong><div class="tiny">The UI sends JSON to the n8n Webhook node.</div></div></div>
-            <div class="step"><div class="n">3</div><div><strong>n8n builds artifacts</strong><div class="tiny">The workflow collects, transforms, aggregates, and drafts markdown files.</div></div></div>
-            <div class="step"><div class="n">4</div><div><strong>UI loads returned files</strong><div class="tiny">Returned markdown becomes editable and downloadable.</div></div></div>
+            <div class="step"><div class="n">1</div><div><strong>User enters topic + days</strong><div class="tiny">No manual file setup required.</div></div></div>
+            <div class="step"><div class="n">2</div><div><strong>UI sends JSON payload</strong><div class="tiny">Topic, day window, wiki=false, requested artifacts.</div></div></div>
+            <div class="step"><div class="n">3</div><div><strong>Orchestrator runs workflow</strong><div class="tiny">Collect, cluster, analyze, and draft markdown artifacts.</div></div></div>
+            <div class="step"><div class="n">4</div><div><strong>UI receives files</strong><div class="tiny">Returned markdown becomes editable in-browser.</div></div></div>
           </div>
         </div>
       </div>
 
       <div class="card span-8">
-        <div class="card-head"><h3>Actual n8n Workflow Blueprint</h3><span class="helper">Node-by-node build order</span></div>
-        <div class="card-body">
-          <div class="nodes">
-            <div class="node"><div class="n">1</div><div><strong>Webhook</strong><div class="tiny">Use a Webhook trigger node with <code>POST</code>. Set response handling to use a dedicated response path so the workflow can return structured JSON files to the UI.</div></div></div>
-            <div class="node"><div class="n">2</div><div><strong>Edit Fields (Set)</strong><div class="tiny">Normalize the incoming payload into fields like <code>topic</code>, <code>days</code>, <code>wiki=false</code>, and <code>requested_artifacts</code>.</div></div></div>
-            <div class="node"><div class="n">3</div><div><strong>HTTP Request</strong><div class="tiny">Call your chosen article-search or article-enrichment service. Repeat as needed for search, fetch, or metadata enrichment.</div></div></div>
-            <div class="node"><div class="n">4</div><div><strong>Edit Fields (Set)</strong><div class="tiny">Map the collected results into draft markdown strings for <code>run_brief.md</code>, <code>source_ledger.md</code>, <code>cluster_registry.md</code>, and the other artifact files.</div></div></div>
-            <div class="node"><div class="n">5</div><div><strong>Aggregate</strong><div class="tiny">Combine the separate file objects into a single list or single object so the response returns one <code>files</code> structure instead of scattered items.</div></div></div>
-            <div class="node"><div class="n">6</div><div><strong>Respond to Webhook</strong><div class="tiny">Return a JSON body containing <code>status</code>, <code>topic</code>, <code>days</code>, and a <code>files</code> object keyed by markdown filename.</div></div></div>
-          </div>
-          <div class="notice" style="margin-top:14px">Recommended response body: one JSON object with <code>files</code> containing filename → markdown content pairs.</div>
+        <div class="card-head">
+          <h3>Request / Response Preview</h3>
+          <span class="helper">Use this JSON shape in your no-code tool</span>
         </div>
-      </div>
-
-      <div class="card span-6">
-        <div class="card-head"><h3>Outbound Request</h3><span class="helper">Sent by this UI</span></div>
         <div class="card-body">
-          <pre id="payloadPreview"></pre>
-        </div>
-      </div>
-
-      <div class="card span-6">
-        <div class="card-head"><h3>Expected Response</h3><span class="helper">Returned by n8n</span></div>
-        <div class="card-body">
-          <pre>{
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+            <div>
+              <div class="tiny" style="margin-bottom:8px">Outbound request</div>
+              <pre id="payloadPreview"></pre>
+            </div>
+            <div>
+              <div class="tiny" style="margin-bottom:8px">Expected response shape</div>
+              <pre>{
   "status": "ok",
   "topic": "Strait of Hormuz",
   "days": 7,
   "files": {
     "run_brief.md": "# Run Brief ...",
     "source_ledger.md": "# Source Ledger ...",
-    "article_registry.md": "# Article Registry ...",
     "final_report.md": "# Final Report ..."
   },
   "meta": {
@@ -197,17 +237,27 @@
     "generated_at": "2026-04-15T00:00:00Z"
   }
 }</pre>
-          <div id="runMessage" class="notice warn" style="margin-top:14px">Add your n8n Webhook URL, then click “Run n8n Workflow.”</div>
+            </div>
+          </div>
+          <div id="runMessage" class="notice warn" style="margin-top:14px">Add a webhook URL, then click “Run Orchestration.” If no webhook is supplied, you can still generate a local draft workspace.</div>
         </div>
       </div>
 
       <div class="card span-5">
-        <div class="card-head"><h3>Generated Files</h3><span class="helper">Webhook output or local draft</span></div>
-        <div class="card-body"><div class="filelist" id="fileList"></div></div>
+        <div class="card-head">
+          <h3>Generated Files</h3>
+          <span class="helper">Returned by the webhook or created locally</span>
+        </div>
+        <div class="card-body">
+          <div class="filelist" id="fileList"></div>
+        </div>
       </div>
 
       <div class="card span-7">
-        <div class="card-head"><h3>Markdown Editor</h3><span class="helper" id="editorFileName">run_brief.md</span></div>
+        <div class="card-head">
+          <h3>Markdown Editor</h3>
+          <span class="helper" id="editorFileName">run_brief.md</span>
+        </div>
         <div class="card-body">
           <div class="editor-toolbar">
             <button id="restoreTemplateBtn">Restore Template</button>
@@ -215,23 +265,6 @@
             <button id="copyBtn">Copy Current</button>
           </div>
           <textarea id="editor"></textarea>
-        </div>
-      </div>
-
-      <div class="card span-12">
-        <div class="card-head"><h3>n8n Build Notes</h3><span class="helper">Use this directly while assembling the no-code flow</span></div>
-        <div class="card-body">
-          <div class="workflow-box">
-            <strong>Recommended build order</strong>
-            <ul>
-              <li>Create a <code>Webhook</code> trigger with <code>POST</code> and configure it to return data through a response node.</li>
-              <li>Add <code>Edit Fields (Set)</code> right after the trigger to normalize <code>topic</code>, <code>days</code>, and the artifact list.</li>
-              <li>Add one or more <code>HTTP Request</code> nodes to call your article source, search API, metadata API, or enrichment services.</li>
-              <li>Add another <code>Edit Fields (Set)</code> node to convert the results into markdown file payloads.</li>
-              <li>Use <code>Aggregate</code> to gather all file objects into one response-ready object.</li>
-              <li>Finish with <code>Respond to Webhook</code> so the browser receives one JSON response containing all markdown files.</li>
-            </ul>
-          </div>
         </div>
       </div>
     </section>
@@ -264,11 +297,12 @@
   function currentPayload(){
     const topic = document.getElementById("topicInput").value.trim() || "Untitled Topic";
     const days = parseInt(document.getElementById("daysInput").value, 10);
+    const provider = document.getElementById("providerInput").value;
     return {
       topic,
       days,
       wiki: false,
-      provider: "n8n",
+      provider,
       requested_artifacts: [
         "run_brief.md",
         "source_ledger.md",
@@ -290,6 +324,7 @@
     document.getElementById("payloadPreview").textContent = JSON.stringify(payload, null, 2);
     document.getElementById("statusTopic").textContent = `Topic: ${payload.topic}`;
     document.getElementById("statusDays").textContent = `Window: ${payload.days} days`;
+    document.getElementById("statusProvider").textContent = `Provider: ${payload.provider}`;
     document.getElementById("heroTitle").textContent = `${payload.topic} · Agent Workspace`;
   }
 
@@ -350,7 +385,7 @@
   function generateLocalDraft(){
     const payload = currentPayload();
     setFiles(scenarioTemplates(payload.topic, payload.days));
-    setMessage("Local draft generated. Use it for layout testing or connect n8n to replace it with real workflow output.", "warn");
+    setMessage("Local draft generated. Connect a webhook URL to replace these templates with orchestrator output.", "warn");
   }
 
   function downloadText(filename, text){
@@ -370,11 +405,11 @@
     updatePayloadPreview();
 
     if(!url){
-      setMessage("No n8n Webhook URL found. Add it first or use Generate Local Draft.", "bad");
+      setMessage("No webhook URL found. Add a webhook endpoint or use “Generate Local Draft.”", "bad");
       return;
     }
 
-    setMessage("Running n8n workflow… waiting for response.", "warn");
+    setMessage("Running orchestration… waiting for webhook response.", "warn");
 
     try{
       const headers = { "Content-Type": "application/json" };
@@ -396,7 +431,7 @@
       if(!data.files || typeof data.files !== "object") throw new Error("Webhook response is missing a files object.");
 
       setFiles(data.files);
-      setMessage(`Run complete. Loaded ${Object.keys(data.files).length} markdown files from n8n.`, "ok");
+      setMessage(`Run complete. Loaded ${Object.keys(data.files).length} markdown files from the orchestration layer.`, "ok");
     } catch(err){
       setMessage(`Run failed: ${err.message}`, "bad");
     }
@@ -404,11 +439,14 @@
 
   document.getElementById("topicInput").addEventListener("input", updatePayloadPreview);
   document.getElementById("daysInput").addEventListener("change", updatePayloadPreview);
+  document.getElementById("providerInput").addEventListener("change", updatePayloadPreview);
+
   document.getElementById("runBtn").addEventListener("click", runWebhook);
   document.getElementById("generateLocalBtn").addEventListener("click", generateLocalDraft);
   document.getElementById("resetBtn").addEventListener("click", () => {
     document.getElementById("topicInput").value = "Strait of Hormuz";
     document.getElementById("daysInput").value = "7";
+    document.getElementById("providerInput").value = "n8n";
     document.getElementById("webhookUrlInput").value = "";
     document.getElementById("authTokenInput").value = "";
     updatePayloadPreview();
@@ -416,20 +454,26 @@
   });
 
   document.getElementById("downloadCurrentBtn").addEventListener("click", () => {
-    saveEditor(); downloadText(activeFile, files[activeFile] || "");
+    saveEditor();
+    downloadText(activeFile, files[activeFile] || "");
   });
+
   document.getElementById("downloadEditorBtn").addEventListener("click", () => {
-    saveEditor(); downloadText(activeFile, files[activeFile] || "");
+    saveEditor();
+    downloadText(activeFile, files[activeFile] || "");
   });
+
   document.getElementById("downloadAllBtn").addEventListener("click", () => {
     saveEditor();
     Object.entries(files).forEach(([name, text], idx) => setTimeout(() => downloadText(name, text), idx * 150));
   });
+
   document.getElementById("copyBtn").addEventListener("click", async () => {
     saveEditor();
     await navigator.clipboard.writeText(files[activeFile] || "");
     setMessage("Current markdown copied to clipboard.", "ok");
   });
+
   document.getElementById("restoreTemplateBtn").addEventListener("click", () => {
     if(templatesStore[activeFile]) {
       files[activeFile] = templatesStore[activeFile];
@@ -438,6 +482,7 @@
       setMessage(`Restored template for ${activeFile}.`, "ok");
     }
   });
+
   document.getElementById("editor").addEventListener("input", saveEditor);
 
   updatePayloadPreview();
