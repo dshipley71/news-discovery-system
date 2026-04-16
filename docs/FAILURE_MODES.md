@@ -1,150 +1,56 @@
-# Failure Modes and Reliability Safeguards
+# Failure Modes for Gradio Analyst Workflow
 
 ## 1) Purpose
-Document common failure patterns for the current design-doc + n8n + Gradio vertical slice, define how they are detected, and specify required system behavior to avoid silent or misleading analyst outputs.
+This document defines Gradio-specific and workflow-specific failure modes that can mislead analysts, plus required behavior to prevent silent failures.
 
-## 2) Scope
-Applies to:
-- UI-triggered runs from Run Builder / Gradio surface
-- n8n ingestion + normalization + aggregation workflow slice
-- downstream stage contracts defined in `docs/WORKFLOWS.md`
+## 2) Reliability Principles
+- No stage may fail silently.
+- Every warning/failure must be visible in the Gradio UI with reason, metric, threshold, and next action.
+- Every publishable insight must remain traceable to source evidence and citations.
 
-## 3) Core Failure Modes
+## 3) Failure Mode Matrix (Required)
 
-## 3.1 Duplicate Article Inflation
-**How it happens**
-- Syndicated stories appear across sources with small headline edits.
-- Same source item is retrieved multiple times across retries/windows.
-- URL variants (tracking params, mirror domains) bypass naive dedupe.
+| Failure mode | Description | Detection method | Prevention rule | UI validation signal | Fallback behavior |
+|---|---|---|---|---|---|
+| Duplicate article inflation | Same story appears multiple times (wire syndication, retries, URL variants) and inflates counts/trends/clusters. | Duplicate ratio; URL canonicalization collisions; near-duplicate text hash families; same-source/time burst checks. | Deduplicate before clustering/timeline; enforce unique `article_id` counts for map/timeline/cluster evidence. | Stage badge: `WARN_DUPLICATES`/`FAIL_DUPLICATES`; show duplicate ratio, affected clusters, and affected timeline bins. | Mark run as partial-confidence, suppress publish-grade spike claims, keep duplicate lineage table for analyst review. |
+| Empty ingestion | Retrieval completes but returns zero usable articles. | `retrieved_count == 0` and source attempts > 0; all payloads empty/filtered. | Block downstream stages when no valid articles remain after normalization. | Blocking banner: `No articles ingested`; show source attempts, date window, query terms. | Offer guided rerun: broaden date range, broaden source profile, or adjust topic terms. |
+| Schema drift | Source payload fields/types change and canonical mapper no longer matches reliably. | Required-field completeness drop; type mismatch count; unexpected new/missing keys. | Enforce canonical schema contract and quarantine non-conforming records. | `SCHEMA_DRIFT` warning/fail card with field-level error counts and examples. | Continue only if completeness stays above warning threshold; otherwise stop and request connector mapping update. |
+| Incorrect date parsing | Bad/ambiguous dates produce wrong timeline placement or out-of-range events. | Parse failure rate; out-of-window timestamps; impossible future/past bucket anomalies. | Use strict parser policy (timezone-aware, explicit locale policy); reject invalid timeline dates. | `DATE_PARSE_ISSUE` card with invalid-date count and impacted records link. | Exclude invalid timestamps from analytics, keep invalid-date audit bucket, block publish if coverage below threshold. |
+| Broken UI state | Gradio state desync causes stale run IDs, stuck stages, or controls showing wrong status. | Missing/changed run ID between callbacks; stage heartbeat timeout; UI state != backend state checksum. | Require authoritative backend run state; never finalize UI from local state only. | Status rail shows `STATE_DESYNC` and disables publish/export actions. | Auto-refresh from backend snapshot; allow analyst to rebind to latest valid run; fail safely if unresolved. |
+| Incorrect geospatial inference | Wrong place resolved (e.g., Paris, TX vs Paris, FR), fabricated coordinates, or unsupported inference presented as fact. | Low-confidence resolver output; ambiguity flags; country/region conflict checks; geo-evidence mismatch rate. | Require evidence span + confidence + method (`explicit`/`inferred`) for each location claim. | Map marker warning icon and `LOW_GEO_CONFIDENCE` panel with ambiguous locations list. | Suppress high-confidence geo claims; keep uncertain locations as inspectable artifacts only. |
+| Weak clustering | Clusters formed from sparse/noisy overlap and presented as robust events. | Low cohesion/separation metrics; low unique-article count; high top-source concentration. | Enforce minimum evidence and cluster confidence thresholds; flag exploratory-only clusters. | Cluster table column flags: `weak_cluster`, `top_source_ratio`, `duplicate_ratio`. | Keep weak clusters visible for exploration but block publish-grade conclusions from them. |
+| Missing citations | Claims cannot be traced to source articles/URLs/publication metadata. | Claim-to-citation coverage check; orphan claim count; citation schema validation. | 100% citation linkage required for publish mode. | `CITATION_GAP` blocking banner; claim list with unresolved citation links. | Enter review-only mode; disable export/publish until citation gaps are resolved. |
+| Misleading timeline spikes | Spikes driven by syndication bursts/backfills/timezone bucketing instead of real event intensity. | Spike source-concentration check; duplicate-family contribution check; backfill ingestion timestamp mismatch. | Require corroboration from diverse sources and publish-time buckets in canonical timezone. | Timeline spike tooltip includes confidence, source diversity, duplicate share, and anomaly flag. | Re-label as low-confidence anomaly; prevent strong narrative claims unless corroborated. |
 
-**Detection signals**
-- Duplicate ratio > configured threshold.
-- Spike day where many records share near-identical text hash.
-- High count of items with same root URL + same publication hour.
+## 4) System Stop vs Warn Policy
+- **Stop (hard fail):** empty ingestion, broken run-state integrity, missing citations in publish mode, severe schema/date failure below threshold.
+- **Warn (continue with limits):** partial source loss, moderate duplicate risk, low geospatial confidence, weak clusters, anomaly-classified spikes.
 
-**Required behavior**
-- Mark temporal outputs as **dedupe-risk** until dedupe pass completes.
-- Block spike classification if dedupe uncertainty is high.
-- Require lineage map for every merged duplicate.
+## 5) What Analysts Must See at Each Stage
+At each stage, the UI must show:
+1. Inputs used (topic, date range, source profile, run ID).
+2. Validation checks run (pass/warn/fail).
+3. Metrics vs thresholds.
+4. Impacted artifacts (cluster IDs, location IDs, timeline bins, citation IDs).
+5. Next recommended action.
 
-## 3.2 Empty Ingestion Results
-**How it happens**
-- Topic too narrow.
-- Source query mismatch.
-- Source API schema/rate-limit change.
+## 6) How Analysts Detect Bad Data
+Analysts detect bad data via visible counters and drill-down links:
+- duplicate ratio and duplicate family table,
+- invalid-date and out-of-window counts,
+- source success/failure matrix,
+- map ambiguity/low-confidence markers,
+- weak-cluster/source-concentration columns,
+- claim-to-citation coverage gauge.
 
-**Detection signals**
-- `retrieved_count == 0` across all sources.
-- Non-zero source attempts but all return empty payloads.
+## 7) No-Silent-Failure Requirement
+If a stage errors, times out, or yields a degraded state, UI must immediately surface:
+- failure code,
+- plain-language impact,
+- blocked downstream actions,
+- remediation path (rerun, widen scope, update mapping, escalate).
 
-**Required behavior**
-- Fail with explicit reason (no silent "success").
-- UI must show: attempted sources, query terms, date window, and remediation actions.
-- Offer guided rerun with widened date window or expanded source profile.
-
-## 3.3 Partial Source Failures
-**How it happens**
-- One or more providers timeout, auth fail, or throttle.
-
-**Detection signals**
-- Source-level failures with at least one successful source.
-- Source diversity drops below threshold.
-
-**Required behavior**
-- Continue run as **partial** when minimum viable coverage is met.
-- Downgrade confidence for narrative/contradiction claims dependent on missing sources.
-- Show source gap warning in run monitor and report limitations section.
-
-## 3.4 Incorrect Date Parsing
-**How it happens**
-- Mixed timestamp formats/timezones.
-- Locale-specific ambiguous dates.
-- Null or malformed publication timestamps.
-
-**Detection signals**
-- Parse failure rate above threshold.
-- Records outside requested date bounds after normalization.
-- Timeline bucket has future dates or impossible regressions.
-
-**Required behavior**
-- Reject records with invalid timestamps from timeline computations.
-- Keep excluded records in an "invalid-date" bucket for audit.
-- Block publish if valid timestamp coverage falls below minimum threshold.
-
-## 3.5 Inconsistent Schemas
-**How it happens**
-- Source payload changes field names/types.
-- Optional fields unexpectedly absent.
-
-**Detection signals**
-- Required canonical fields missing.
-- Type mismatch in normalized schema.
-
-**Required behavior**
-- Record-level validation flags are mandatory.
-- Stop stage when required-field completeness drops below fail threshold.
-- Display exact field-level error counts in Stage Detail.
-
-## 3.6 Broken UI → Workflow Connections
-**How it happens**
-- UI sends wrong payload keys.
-- Webhook URL stale/incorrect.
-- UI accepts invalid date ranges not accepted by workflow.
-
-**Detection signals**
-- Run starts in UI but no orchestrator run ID returned.
-- 4xx/5xx webhook response or timeout.
-- UI status stuck in pending with no stage transitions.
-
-**Required behavior**
-- Fail fast at intake with actionable endpoint/contract error.
-- Never show "run started" without confirmed run ID and timestamp.
-- Persist request/response envelope for debugging.
-
-## 3.7 Timeline Inaccuracies
-**How it happens**
-- Wrong bucket timezone.
-- Event timestamps use retrieval time instead of publish time.
-- Mixed daily/hourly bins without clear policy.
-
-**Detection signals**
-- Bucket totals not equal to counted valid records.
-- Sudden day shifts around midnight UTC/local boundary.
-
-**Required behavior**
-- Use explicit canonical timezone (UTC) for aggregation.
-- Store both publish timestamp and retrieval timestamp separately.
-- Expose bucket policy and timezone in Timeline tooltip/legend.
-
-## 3.8 Misleading Spikes from Batching/Syndication
-**How it happens**
-- Bulk publication at a single time from one wire source.
-- Backfill jobs ingest older items together.
-
-**Detection signals**
-- Spike dominated by one source or one duplicate lineage family.
-- Spike window has low source diversity.
-
-**Required behavior**
-- Classify as **distribution anomaly** unless corroborated by diverse sources.
-- Mark spike confidence low when source concentration is high.
-- Require analyst-visible explanation for each spike marker.
-
-## 4) Severity Model
-- **Critical (block publish):** empty ingestion, broken UI-workflow contract, orphan claims, severe timestamp corruption.
-- **Major (allow partial with warning):** partial source outage above warning threshold, high duplicate uncertainty, low source diversity.
-- **Minor (warn):** non-critical schema drift with successful normalization fallback.
-
-## 5) Standard Remediation Paths
-1. Retry failed source connectors with bounded backoff.
-2. Rerun stage with stricter dedupe or adjusted temporal sensitivity.
-3. Expand source profile when diversity threshold is not met.
-4. Escalate to admin when contract/schema changes require connector update.
-
-## 6) Assumptions
-- UI can render stage-level warnings/errors and suggested remediations.
-- Artifact lineage is available for drill-down.
-
-## 7) Unresolved Questions
-1. Final numeric values for warning/fail thresholds by environment.
-2. Whether strict mode should block publish on any partial-source condition.
+## 8) Remaining Open Items
+1. Final numeric thresholds by environment.
+2. Strict-mode policy for partial runs.
+3. Alert routing (in-app only vs in-app + external notifications).

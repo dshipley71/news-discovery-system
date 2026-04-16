@@ -1,172 +1,114 @@
-# Validation Rules by Stage
+# Validation Rules (Enforceable)
 
 ## 1) Purpose
-Define deterministic pass/warn/fail rules, minimum data thresholds, and fallback behavior for each stage so analysts receive consistent, auditable outcomes.
+Define enforceable pass/warn/fail rules for Gradio-based analyst workflows so reliability issues are explicit, actionable, and auditable.
 
-## 2) Validation Status Semantics
-- **Pass:** output is valid for downstream use without caveat.
-- **Warn:** output usable only with explicit confidence downgrade and UI warning.
-- **Fail:** stage output blocked; downstream publish blocked unless rerun succeeds.
-- **Partial:** stage completed with degraded branch; downstream allowed only if minimum thresholds are still met.
+## 2) Status Semantics
+- **PASS:** stage output is valid for downstream use.
+- **WARN:** stage output is usable with confidence downgrade and required UI warning.
+- **FAIL:** stage output blocked; downstream publish path blocked.
+- **PARTIAL:** stage completed with degraded coverage, must carry limitation labels.
 
-## 3) Cross-Stage Global Thresholds
-These defaults are starting values and must be environment-configurable.
+## 3) Global Enforceable Rules
+- Every run must have immutable `run_id`, `started_at`, and stage status timeline.
+- Publish mode requires 100% claim-to-citation linkage.
+- Every insight shown in UI (timeline spike, map hotspot, cluster claim) must link to evidence artifacts.
+- Any WARN/FAIL must include remediation text and a drill-down path.
 
-- Minimum successful sources per run: **>= 1** (warn if only 1, fail if 0).
-- Required canonical field completeness (`source`, `published_at`, `title_or_text_ref`): **>= 95% pass**, **90-94% warn**, **<90% fail**.
-- Valid publish timestamp coverage: **>= 95% pass**, **90-94% warn**, **<90% fail**.
-- Location traceability coverage (`location_id -> article_id -> evidence_span`): **100% required**.
-- Cluster traceability coverage (`cluster_id -> article_ids[] -> citation_ids[]`): **100% required for publishable outputs**.
-- Claim-to-citation coverage for publish: **100% required**.
+## 4) Numeric Default Thresholds (Configurable)
+- Required canonical completeness (`source`, `published_at`, `title_or_text_ref`):
+  - PASS >= 95%
+  - WARN 90-94%
+  - FAIL < 90%
+- Valid parsed publication dates:
+  - PASS >= 95%
+  - WARN 90-94%
+  - FAIL < 90%
+- Duplicate ratio (run level):
+  - PASS < 0.20
+  - WARN 0.20-0.39
+  - FAIL >= 0.40
+- Geospatial low-confidence share:
+  - PASS < 0.20
+  - WARN 0.20-0.39
+  - FAIL >= 0.40 (for geo-claim-enabled publish)
+- Weak clusters share:
+  - PASS < 0.25
+  - WARN 0.25-0.49
+  - FAIL >= 0.50 (for publish-grade clustering)
 
-## 4) Stage Rules
+## 5) Failure-Mode Rules (Required)
 
-## Stage 0: Intake
-**Rules**
-- Topic non-empty.
-- Date window valid and within allowed bounds.
-- End date must not be in the future.
+### 5.1 Duplicate Article Inflation
+- **Detect:** duplicate ratio + duplicate family concentration by bin/cluster.
+- **Prevent:** dedupe before clustering and timeline generation.
+- **UI signal:** `WARN_DUPLICATES` or `FAIL_DUPLICATES` with impacted artifacts.
+- **Fallback:** anomaly-only spike labels; block publish-grade event assertions on affected bins.
 
-**Behavior**
-- Fail fast on contract/input error.
-- Show exact invalid fields and correction hint.
+### 5.2 Empty Ingestion
+- **Detect:** `retrieved_count == 0` after retrieval/normalization.
+- **Prevent:** source health + query guardrails at intake.
+- **UI signal:** blocking `NO_DATA` state.
+- **Fallback:** guided rerun presets only; no downstream stage execution.
 
-## Stage 1: Source Discovery
-**Rules**
-- At least one source planned and reachable.
-- Source plan contains fallback order and credential mode.
+### 5.3 Schema Drift
+- **Detect:** field/type drift and completeness drop.
+- **Prevent:** canonical schema contract validation at normalization boundary.
+- **UI signal:** `SCHEMA_DRIFT` field-level diff summary.
+- **Fallback:** quarantine invalid rows; fail stage if completeness < fail threshold.
 
-**Behavior**
-- Fail if no reachable sources.
-- Warn if source diversity below configured minimum.
+### 5.4 Incorrect Date Parsing
+- **Detect:** invalid parse count, out-of-range count, impossible future buckets.
+- **Prevent:** strict timezone-aware parser + accepted format policy.
+- **UI signal:** `DATE_PARSE_ISSUE` counter and record list.
+- **Fallback:** exclude invalid-date records from timeline; fail publish if coverage below threshold.
 
-## Stage 2: Retrieval
-**Rules**
-- Response metadata logged for each attempted source.
-- Explicit error recorded for each failed source.
-- Retrieved volume > 0 for pass.
+### 5.5 Broken UI State
+- **Detect:** UI run state checksum mismatch; heartbeat timeout; callback result bound to wrong run.
+- **Prevent:** backend-authoritative state sync and run-token checks.
+- **UI signal:** `STATE_DESYNC` and disabled finalize/export controls.
+- **Fallback:** force resync/rebind; fail safe if mismatch persists.
 
-**Behavior**
-- Fail if all sources return zero items and zero recoverable path exists.
-- Partial if some sources fail but minimum coverage survives.
-- UI must expose attempted/succeeded/failed counts.
+### 5.6 Incorrect Geospatial Inference
+- **Detect:** ambiguity/conflict checks; low-confidence geocoding rates.
+- **Prevent:** require confidence + evidence span + extraction method on every location.
+- **UI signal:** `LOW_GEO_CONFIDENCE` map and panel warnings.
+- **Fallback:** suppress strong geo conclusions; retain uncertain items as review artifacts.
 
-## Stage 3: Normalization
-**Rules**
-- Canonical schema coercion applied and logged.
-- Required field completeness thresholds enforced.
-- Invalid records explicitly quarantined.
+### 5.7 Weak Clustering
+- **Detect:** low cohesion, low unique-evidence count, high source concentration.
+- **Prevent:** enforce minimum cluster evidence and confidence thresholds.
+- **UI signal:** `WEAK_CLUSTER` flags in cluster table and details.
+- **Fallback:** exploratory-only clusters allowed; publish claims blocked for weak clusters.
 
-**Behavior**
-- Fail below completeness threshold.
-- Warn for type coercions above warning threshold.
+### 5.8 Missing Citations
+- **Detect:** orphan claim count > 0 or required citation fields missing.
+- **Prevent:** citation-link check at evidence packaging and report composition.
+- **UI signal:** `CITATION_GAP` blocking indicator.
+- **Fallback:** review-only mode; disable publish/export.
 
-## Stage 4: Geospatial Extraction
-**Rules**
-- Each extracted location has: city/region-or-state/country fields when available, coordinates when resolved, confidence score, and extraction method.
-- Each location links to source article and evidence span.
-- Ambiguous locations are explicitly flagged.
-- Confidence score is bounded in [0.0, 1.0].
+### 5.9 Misleading Timeline Spikes
+- **Detect:** spike dominated by one source, duplicate family, or backfill artifact.
+- **Prevent:** corroboration rule (minimum source diversity + duplicate-adjusted volume).
+- **UI signal:** `SPIKE_ANOMALY` label with confidence score.
+- **Fallback:** downgrade to anomaly marker; narrative claims require corroboration.
 
-**Behavior**
-- Fail if traceability is incomplete.
-- Warn when unresolved/ambiguous share exceeds threshold.
-- Partial allowed when resolver service is degraded but extraction evidence remains available.
+## 6) Stage Stop/Warn Matrix
+- Intake: fail on invalid input/date range.
+- Retrieval: fail on empty ingestion; partial on source subset failures.
+- Normalization: fail on schema completeness below threshold.
+- Geospatial: warn/fail on low-confidence or traceability gaps depending on severity.
+- Clustering: warn for weak clusters, fail for missing cluster schema/attribution.
+- Timeline: warn/fail on date quality and anomaly conditions.
+- Evidence/report: fail on citation gaps and orphan claims.
 
-## Stage 5: Geospatial Aggregation
-**Rules**
-- Article counts per location use unique `article_id` values (duplicate mentions cannot inflate counts).
-- Nearby grouping method and distance radius are logged.
-- Multiple locations per article are retained.
-- Marker size must equal aggregated unique article count.
-- Marker color must map to defined intensity bands.
+## 7) Analyst Visibility Requirements
+At each stage, analyst must see:
+- status (PASS/WARN/FAIL/PARTIAL),
+- measured value and threshold,
+- affected artifacts,
+- exact blocked actions,
+- next best action.
 
-**Behavior**
-- Fail if duplicate inflation is detected.
-- Warn if grouping creates unstable/over-merged results above threshold.
-- Block downstream cluster scoring if geospatial aggregation integrity fails.
-
-## Stage 6: Event Clustering
-**Rules**
-- Cluster schema fields required: `cluster_id`, `cluster_label`, `article_ids[]`, `source_diversity`, `cluster_confidence`.
-- No duplicate inflation: duplicate or near-duplicate article variants cannot increase cluster evidence counts.
-- Source attribution preserved: each clustered article must retain original source metadata.
-- Cluster minimum evidence: each cluster must meet configured minimum unique article count.
-- Weak cluster identification: clusters below confidence threshold are explicitly flagged.
-
-**Behavior**
-- Fail when cluster schema is incomplete or source attribution is broken.
-- Fail when minimum evidence rule is violated for publishable clusters.
-- Warn (not fail) for weak clusters when exploratory output is allowed.
-- One auto-rerun allowed with adjusted profile before hard fail.
-
-## Stage 7: Temporal Analytics
-**Rules**
-- Bucket totals equal valid timestamped record count.
-- Bucket timezone explicitly declared.
-- Spike/trend markers include supporting cluster IDs and evidence IDs.
-
-**Behavior**
-- Warn when low volume or low source diversity undermines confidence.
-- Reject spike labels likely caused by syndication batching.
-
-## Stage 8: Narrative Comparison
-**Rules**
-- Contradictions require >=2 independent evidence records.
-- Consensus labels require corroboration threshold.
-
-**Behavior**
-- Warn/fail when cross-source coverage is insufficient.
-- Never infer consensus from single-source dominance.
-
-## Stage 9: Evidence Packaging
-**Rules**
-- Citation schema fields required: `article_id`, `source`, `url`, `publication_date`, `claim_linkage[]`.
-- Every report claim maps to at least one citation.
-- Evidence bundles must support all mandatory paths:
-  - `cluster -> supporting articles`
-  - `peak -> clusters -> articles`
-  - `location -> clusters -> articles`
-
-**Behavior**
-- Fail publish gate on any orphan claim.
-- Fail when mandatory citation fields are missing.
-- Fail when any required evidence-bundle edge is unresolved.
-
-## Stage 10: Report Composition
-**Rules**
-- Required report sections present.
-- Limitations and uncertainty section required when warnings exist.
-
-**Behavior**
-- Fail if mandatory sections/citation links missing.
-
-## Stage 11: Critic Loop
-**Rules**
-- Max iterations bounded (default 2).
-- Critic cannot remove citation coverage.
-- Confidence regressions require explicit rationale.
-
-**Behavior**
-- Re-run only when critical checks fail and a remediation path exists.
-- Reject output when unresolved critical failures persist after max iterations.
-
-## 5) Fallback Strategy Matrix
-1. **Source failure fallback:** continue with available sources if minimum threshold met; otherwise fail-fast.
-2. **Schema drift fallback:** map to canonical fallbacks; quarantine invalid records.
-3. **Temporal ambiguity fallback:** drop invalid timestamps from analytics and surface invalid-date count.
-4. **Geospatial resolver outage fallback:** continue with extraction-only artifacts and uncertainty warnings; suppress map-derived claims.
-5. **Clustering insufficiency fallback:** retain unassigned/weak-cluster records as inspectable artifacts and block publish-grade cluster claims.
-6. **Citation incompleteness fallback:** allow internal review mode only; block publish/export mode.
-
-## 6) Analyst-Facing Error Handling Requirements
-At every failed/warned stage, UI must show:
-- failed rule(s),
-- observed metric vs threshold,
-- recommended next action (rerun, broaden sources, adjust profile, escalate),
-- affected downstream outputs.
-
-## 7) Assumptions
-- Thresholds are configurable in admin profile.
-- Stage artifacts persist enough metadata to compute all rules.
-- Duplicate detection signals are available before clustering confidence is finalized.
+## 8) Implementation Constraint
+Rules must be executable with current lightweight architecture (Gradio + orchestrated workflow + validation contracts), without introducing heavy frameworks.
