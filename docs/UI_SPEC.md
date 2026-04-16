@@ -85,10 +85,32 @@ Must support:
 - Overlay markers for peaks/spikes/trends.
 - Hover shows underlying article IDs and source mix.
 
-## 4.2 Map
-- Point/region layers with uncertainty visualization.
-- Filter by event group, source, date, confidence.
-- Click location to view associated claims and citations.
+## 4.2 Map (Gradio Integration)
+The map is an inspectable output panel backed by geospatial artifacts.
+
+### Map Output Panel Requirements
+- Render marker-based visualization from the Geospatial Map Marker Set artifact.
+- Marker size encodes unique article count.
+- Marker color encodes intensity (low/medium/high).
+- Marker tooltip must show: location label, article count, average confidence, ambiguous-location count.
+- Map legend must define:
+  - size-to-count buckets,
+  - color-to-intensity buckets,
+  - uncertainty symbol for ambiguous locations.
+
+### Map Controls
+- Confidence threshold filter.
+- Source filter.
+- Date range filter.
+- Cluster filter.
+- Ambiguity-only toggle.
+
+### Required Click-through Behavior
+1. Click **location marker** → open location drawer with location group ID and metrics.
+2. Click linked **cluster ID** in drawer → open cluster detail table.
+3. Click **article ID** in cluster table → open article evidence/citation panel.
+
+This enforces the drill path: **location → cluster → articles**.
 
 ## 4.3 Tables
 - Sort/filter/export for events, articles, sources, and contradictions.
@@ -100,6 +122,7 @@ Must support:
   - Failures/warnings
   - Suggested remediation options
 - Critic loop outcomes are visible with iteration count and deltas.
+- Geospatial validation card must include ambiguity and deduplicated count metrics.
 
 ## 6) Accessibility and Usability
 - Keyboard navigable core actions.
@@ -110,6 +133,7 @@ Must support:
 - Immutable run timeline panel with timestamped actions.
 - “Why this output?” affordance on generated insights.
 - Downloadable audit log per run.
+- For map markers, “Why this location?” must show evidence text span and extraction method.
 
 ## 8) Assumptions
 - Interactive charting and mapping components are available in selected UI stack.

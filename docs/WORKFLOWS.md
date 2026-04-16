@@ -11,10 +11,10 @@ Agents:
 2. Source Discovery Agent
 3. Retrieval Agent
 4. Normalization Agent
-5. Deduplication Agent
-6. Event Clustering Agent
-7. Temporal Analytics Agent
-8. Geospatial Agent
+5. Geospatial Extraction Agent
+6. Geospatial Aggregation Agent
+7. Event Clustering Agent
+8. Temporal Analytics Agent
 9. Narrative Comparison Agent
 10. Evidence & Citation Agent
 11. Report Composer Agent
@@ -63,37 +63,40 @@ One orchestrator executes the same stages as internal modules with identical sta
   - Encoding/timezone normalization complete
 - Stop conditions: schema failure rate above threshold => halt for review
 
-## Stage 4: Deduplication
-- Inputs: canonical records
-- Outputs: canonical unique set + duplicate lineage map
+## Stage 4: Geospatial Extraction
+- Inputs: canonical article records
+- Outputs: location extraction set (city, region/state, country, coordinates, confidence, extraction method, ambiguity flags)
 - Validation rules:
-  - Duplicate rationale stored (text similarity, URL, metadata)
-  - No orphan duplicate pointers
-- Stop conditions: if dedupe confidence collapse detected => warning + continue
+  - Every location links to article evidence
+  - Confidence score and extraction method are present
+  - Ambiguous place names are flagged
+- Stop conditions: georesolution capability unavailable => continue in partial mode with clear warning
 
-## Stage 5: Event Clustering
-- Inputs: deduped records
+## Stage 5: Geospatial Aggregation
+- Inputs: location extraction set + canonical article IDs
+- Outputs: location count tables, nearby-location groups, map marker set, legend metadata
+- Validation rules:
+  - Unique article counts per location are deduplicated
+  - Nearby grouping radius and method are logged
+  - Multiple locations per article are preserved without count inflation
+- Stop conditions: if aggregation integrity checks fail, block downstream clustering rerun until fixed
+
+## Stage 6: Event Clustering
+- Inputs: canonical article records + geospatial aggregates
 - Outputs: event groups, membership scores, event summaries
 - Validation rules:
   - Every article either assigned or explicitly unassigned
   - Cluster cohesion above minimum threshold
+  - Cluster-to-location linkage is traceable
 - Stop conditions: insufficient cohesion => rerun with adjusted settings once
 
-## Stage 6: Temporal Analytics
+## Stage 7: Temporal Analytics
 - Inputs: event groups + publish timestamps
 - Outputs: timeline series, peak/spike/trend detections
 - Validation rules:
   - Bucket integrity check
   - Detection thresholds logged
 - Stop conditions: low volume => mark insights as low confidence, continue
-
-## Stage 7: Geospatial Extraction
-- Inputs: clustered articles
-- Outputs: geospatial entities, resolved coordinates/regions, uncertainty flags
-- Validation rules:
-  - Entity-to-evidence links present
-  - Ambiguous place names flagged
-- Stop conditions: geocoding provider outage => continue without map confidence overlays
 
 ## Stage 8: Narrative Comparison
 - Inputs: event groups, source metadata, extracted claims
@@ -150,6 +153,7 @@ Every handoff must include:
 - Cross-source corroboration
 - Temporal consistency
 - Extraction certainty
+- Geospatial certainty (resolution confidence + ambiguity penalties)
 - Contradiction pressure
 
 ## Source weighting rules
@@ -181,14 +185,16 @@ Every handoff must include:
 4. Monitors stage progression in Run Monitor.
 5. Reviews artifacts in Stage Detail panels.
 6. Inspects timeline/map/narrative tabs.
-7. Reviews critic loop deltas.
-8. Exports final report + evidence bundle.
+7. Uses map drill path: location → cluster → articles.
+8. Reviews critic loop deltas.
+9. Exports final report + evidence bundle.
 
 ## 7) Minimal-Code Boundary
 - Preferred: implement these stages with no-code workflow nodes and connectors.
 - Allowed custom code only for:
   - Unavailable connector adapters
-  - Specialized dedupe/clustering primitives not supported by platform
+  - Specialized geospatial disambiguation not supported by platform
+  - Specialized clustering primitives not supported by platform
   - Evidence graph serialization utility
 All custom code must remain small, isolated, and documented before implementation.
 
@@ -197,7 +203,7 @@ All custom code must remain small, isolated, and documented before implementatio
 - Chosen no-code platform can persist stage artifacts and metadata.
 
 ## 9) Open Decisions
-1. Exact clustering strategy and thresholds.
-2. Temporal spike/trend parameter defaults.
-3. Geospatial disambiguation fallback hierarchy.
+1. Default geospatial proximity radius for aggregation.
+2. Exact clustering strategy and thresholds.
+3. Temporal spike/trend parameter defaults.
 4. Critic quality gates and pass criteria tuning.

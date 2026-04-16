@@ -15,8 +15,9 @@ These defaults are starting values and must be environment-configurable.
 - Minimum successful sources per run: **>= 1** (warn if only 1, fail if 0).
 - Required canonical field completeness (`source`, `published_at`, `title_or_text_ref`): **>= 95% pass**, **90-94% warn**, **<90% fail**.
 - Valid publish timestamp coverage: **>= 95% pass**, **90-94% warn**, **<90% fail**.
+- Location traceability coverage (`location_id -> article_id -> evidence_span`): **100% required**.
+- Geospatial confidence visibility (records with shown confidence in UI): **100% required**.
 - Claim-to-citation coverage for publish: **100% required**.
-- Duplicate lineage completeness for merged records: **100% required**.
 
 ## 4) Stage Rules
 
@@ -60,26 +61,42 @@ These defaults are starting values and must be environment-configurable.
 - Fail below completeness threshold.
 - Warn for type coercions above warning threshold.
 
-## Stage 4: Deduplication
+## Stage 4: Geospatial Extraction
 **Rules**
-- Every merged duplicate must reference canonical ID and rationale.
-- No orphan duplicate pointers.
-- Duplicate ratio reported.
+- Each extracted location has: city/region-or-state/country fields when available, coordinates when resolved, confidence score, and extraction method.
+- Each location links to source article and evidence span.
+- Ambiguous locations are explicitly flagged.
+- Confidence score is bounded in [0.0, 1.0].
 
 **Behavior**
-- Warn when duplicate uncertainty exceeds threshold.
-- Block downstream spike labeling if dedupe quality is unresolved.
+- Fail if traceability is incomplete.
+- Warn when unresolved/ambiguous share exceeds threshold.
+- Partial allowed when resolver service is degraded but extraction evidence remains available.
 
-## Stage 5: Event Clustering
+## Stage 5: Geospatial Aggregation
+**Rules**
+- Article counts per location use unique `article_id` values (duplicate mentions cannot inflate counts).
+- Nearby grouping method and distance radius are logged.
+- Multiple locations per article are retained.
+- Marker size must equal aggregated unique article count.
+- Marker color must map to defined intensity bands.
+
+**Behavior**
+- Fail if duplicate inflation is detected.
+- Warn if grouping creates unstable/over-merged results above threshold.
+- Block downstream cluster scoring if geospatial aggregation integrity fails.
+
+## Stage 6: Event Clustering
 **Rules**
 - Every article assigned or explicitly unassigned.
 - Cluster cohesion above minimum score.
+- Cluster records include linked location groups when present.
 
 **Behavior**
 - One auto-rerun allowed with adjusted profile.
 - Fail if cohesion remains below threshold after rerun.
 
-## Stage 6: Temporal Analytics
+## Stage 7: Temporal Analytics
 **Rules**
 - Bucket totals equal valid timestamped record count.
 - Bucket timezone explicitly declared.
@@ -88,15 +105,6 @@ These defaults are starting values and must be environment-configurable.
 **Behavior**
 - Warn when low volume or low source diversity undermines confidence.
 - Reject spike labels likely caused by syndication batching.
-
-## Stage 7: Geospatial
-**Rules**
-- Place entities have evidence links.
-- Ambiguous locations flagged.
-
-**Behavior**
-- Partial allowed for provider outage with map confidence downgrade.
-- Fail only when map output is required by policy and unavailable.
 
 ## Stage 8: Narrative Comparison
 **Rules**
@@ -137,7 +145,7 @@ These defaults are starting values and must be environment-configurable.
 1. **Source failure fallback:** continue with available sources if minimum threshold met; otherwise fail-fast.
 2. **Schema drift fallback:** map to canonical fallbacks; quarantine invalid records.
 3. **Temporal ambiguity fallback:** drop invalid timestamps from analytics and surface invalid-date count.
-4. **Geospatial outage fallback:** continue without map-derived claims unless map is policy-required.
+4. **Geospatial resolver outage fallback:** continue with extraction-only artifacts and uncertainty warnings; suppress map-derived claims.
 5. **Narrative insufficiency fallback:** emit "insufficient evidence" instead of forced comparison.
 
 ## 6) Analyst-Facing Error Handling Requirements
