@@ -1,63 +1,76 @@
 # Artifact and Evidence Specification
 
-## 1) Purpose
-Define artifact expectations and UI-facing lineage for the current analyst dashboard implementation.
+## Purpose
+Define the first-class backend artifacts emitted by `run_workflow` in `src/news_app/workflow.py`.
 
-## 2) Active Workflow Artifacts (Current)
-The workflow currently returns:
-1. **Run Metadata**
-   - `run_id`, `started_at`, input topic/date window
-2. **Ingestion Output**
-   - source ID, request metadata, `hits_count`, `raw_hits[]`
-3. **Normalization Output**
-   - `canonical_articles[]`, validation issues, valid/invalid counts
-4. **Aggregation Output**
-   - `daily_counts[]`, `total_days`
+## First-Class Backend Artifacts (Implemented)
+The backend now emits explicit artifact structures under both `stages.*` and top-level `artifacts.*`.
 
-These are the only guaranteed stage artifacts and are shown directly in the dashboard validation accordion.
+1. **Deduplicated article set**
+   - Path: `artifacts.deduplicated_article_set`
+   - Source: normalized canonical records after ingestion deduplication.
 
-## 3) Dashboard-Derived Analyst Artifacts
-The UI creates analyst views derived from current stage outputs (never simulated):
+2. **Canonical lineage / duplicate map**
+   - Path: `artifacts.canonical_lineage_duplicate_map`
+   - Fields per group:
+     - `dedupe_key`
+     - `canonical_article_id`
+     - `canonical_source`
+     - `article_ids`
+     - `duplicate_article_ids`
+     - `duplicate_count`
 
-### 3.1 Timeline View Model
-- Derived from `aggregation.daily_counts[]`
-- Includes peak annotation and trend summary text.
+3. **Cluster artifact**
+   - Path: `stages.clustering.clusters` and `artifacts.cluster_artifact`
+   - Fields per cluster:
+     - `cluster_id`
+     - `cluster_label`
+     - `article_ids`
+     - `source_diversity`
+     - `cluster_confidence`
+     - `temporal_span.start`
+     - `temporal_span.end`
+     - `heuristic` (currently `deterministic_lexical_token_cluster_v1`)
 
-### 3.2 Cluster View Model
-- Derived from `normalization.canonical_articles[]`
-- Current grouping uses publication-day cluster IDs (`cluster:YYYY-MM-DD`) so analysts can inspect event density and duplicate behavior.
-- Includes:
-  - cluster summary rows,
-  - cluster detail object,
-  - cluster article membership rows,
-  - duplicate ratio and source concentration metrics.
+4. **Citation index**
+   - Path: `stages.citation_traceability` and `artifacts.citation_index`
+   - Includes:
+     - `citations[]`
+     - `citation_count`
+     - `claim_classification_counts`
+     - `by_source`
 
-### 3.3 Citation View Model
-- Derived from `normalization.canonical_articles[]`
-- Includes citation records with:
-  - `citation_id`, `article_id`, `cluster_id`, `source`, `publication_date`, `url`, `claim_classification`, duplicate flag.
-- Includes citation index totals and per-source counts.
+5. **Evidence bundles**
+   - Path: `stages.evidence` and `artifacts.evidence_bundles`
+   - Includes:
+     - `cluster_to_articles[]`
+     - `peak_to_clusters_articles[]`
+     - `location_to_clusters_articles[]`
 
-### 3.4 Evidence Bundle View Model
-- Derived from cluster and citation view models.
-- Includes explicit linkage rows:
-  - `bundle_id`, `bundle_type`, `bundle_subject_id`, `article_id`, `citation_id`, `source`.
+6. **Geospatial entities / markers**
+   - Paths:
+     - `stages.geospatial.entities[]`
+     - `stages.geospatial.map_markers[]`
+     - `stages.aggregation.geospatial.map_markers[]` (UI compatibility)
+   - Includes explicit evidence linkage and confidence.
 
-### 3.5 Geospatial View Model
-- Primary source: `aggregation.geospatial.map_markers[]` when provided by workflow.
-- Fallback source: canonical articles carrying latitude/longitude fields.
-- If neither source exists, UI emits no rows and displays explicit no-data state.
+7. **Analyst warnings**
+   - Path: `stages.warnings` and `artifacts.analyst_warnings`
+   - Warning codes currently emitted:
+     - `weak_source_diversity`
+     - `duplicate_heavy_result_set`
+     - `low_confidence_geo`
+     - `weak_cluster_evidence`
+     - `sparse_coverage`
+     - `speculative_interpretation_risk`
 
-## 4) Traceability Rules in Current UI
-- Every rendered panel must be reproducible from the same run payload.
-- Cluster/citation/evidence rows must reference canonical `article_id` values.
-- Map rows must only appear when coordinate-bearing records are present.
-- No artificial rows may be generated for unavailable stages.
+## Determinism and Reproducibility
+- IDs are generated with deterministic SHA-1-based seeds.
+- Duplicate keys are deterministic URL/title/date keys.
+- Clustering is deterministic lexical-token grouping (explicitly heuristic).
+- Evidence bundle IDs are deterministic from their subject keys.
 
-## 5) Planned Artifact Expansion (Not Yet Guaranteed)
-Future workflow stages may supply first-class artifacts for:
-- geospatial extraction + grouped markers,
-- semantic/event clustering,
-- claim nodes and claim-linkage references.
-
-Until then, UI-level derived models remain inspectable and explicitly labeled as derived from existing stage artifacts.
+## Deferred
+- Semantic/event embeddings-based clustering (not implemented in this phase).
+- External geocoder-backed disambiguation for broad location coverage.
+- Claim graph/report generation beyond citation/evidence contracts.

@@ -1,77 +1,54 @@
 # Validation Rules (In-Repo Multi-Source Workflow)
 
 ## Purpose
-Define enforceable pass/warn/fail rules for ingestion, normalization, and aggregation in the in-repo analyst workflow.
+Define pass/warn/fail rules for backend artifacts produced by the in-repo workflow.
 
 ## Status semantics
-- **PASS:** stage output is valid for downstream use.
-- **WARN:** stage output remains usable with reduced confidence.
-- **FAIL:** stage output is blocked.
-- **PARTIAL:** stage succeeded with degraded source coverage.
+- **PASS:** artifact contract is valid.
+- **WARN:** artifact is usable but confidence is reduced.
+- **FAIL:** required contract is missing or unusable.
 
-## Global rules
-- Every run must include immutable `run_id` and `started_at`.
-- Every article must preserve source attribution (`source`, `source_label`, `source_attribution`).
-- Every ingestion run must expose source telemetry for analyst inspection.
+## Artifact Contract Checks
 
-## Ingestion rules
-### Source execution transparency
-- PASS: `sources_attempted` exists and `source_runs` includes per-source status/count/warnings/error/metadata.
-- FAIL: missing source execution metadata.
+### Deduplication and lineage
+- PASS: duplicate telemetry includes `ingestion_duplicate_ratio` and `duplicate_map[]` with canonical IDs.
+- WARN: duplicate ratio >= 0.20.
+- FAIL: duplicate map missing when articles exist.
 
-### Multi-source operation
-- PASS: more than one enabled source can be attempted in the same run.
-- FAIL: ingestion collapses to single-source behavior while multiple sources are enabled.
+### Cluster artifact
+- PASS: every cluster has `cluster_id`, `cluster_label`, `article_ids`, `source_diversity`, `cluster_confidence`, and `temporal_span`.
+- WARN: cluster confidence < 0.55 or cluster has < 2 articles.
+- FAIL: cluster stage missing while canonical articles exist.
 
-### Partial source failure handling
-- PARTIAL: one or more sources failed/skipped and at least one source succeeded.
-- FAIL: all enabled sources failed/skipped.
+### Citation index
+- PASS: `citation_count == len(citations)` and every citation references canonical `article_id`.
+- WARN: speculative share > 0.40.
+- FAIL: missing citations for canonical articles in analysis mode.
 
-### Optional source behavior (X/Twitter)
-- PASS/PARTIAL: missing `TWITTER_BEARER_TOKEN` yields explicit `skipped` status + warning.
-- FAIL: missing token causes entire ingestion to fail.
+### Evidence bundles
+- PASS: all three bundle families exist:
+  - `cluster_to_articles`
+  - `peak_to_clusters_articles`
+  - `location_to_clusters_articles`
+- WARN: peak/location bundle families are empty due to sparse upstream data.
+- FAIL: bundle stage absent.
 
-### Retry/fallback behavior
-- PASS: Reddit adapter retries 429 responses and can fall back to RSS.
-- WARN: JSON path failed and RSS fallback recovered.
-- FAIL: both JSON and RSS paths failed for Reddit.
+### Geospatial
+- PASS: each geospatial entity includes location fields, confidence, extraction method, and article linkage.
+- WARN: ambiguous or low-confidence geo entities present.
+- FAIL: malformed geospatial records (missing `article_id` or coordinates where marker is emitted).
 
-### Duplicate inflation guard
-- PASS: ingestion duplicate ratio < 0.20.
-- WARN: 0.20-0.39.
-- FAIL: >= 0.40 when high-confidence downstream output is requested.
+### Warning signals
+- PASS: warning stage present even if empty list.
+- FAIL: warning stage missing.
 
-## Normalization rules
-### Canonical schema completeness
-Required fields:
-- `article_id`
-- `title`
-- `published_at`
-- `source`
+## Analyst Warning Codes
+- `weak_source_diversity`
+- `duplicate_heavy_result_set`
+- `low_confidence_geo`
+- `weak_cluster_evidence`
+- `sparse_coverage`
+- `speculative_interpretation_risk`
 
-Thresholds:
-- PASS: >= 95%
-- WARN: 90-94%
-- FAIL: < 90%
-
-### Source attribution completeness
-- PASS: 100% of canonical records include `source_attribution`.
-- WARN: attribution present with missing optional subfields.
-- FAIL: attribution missing.
-
-## Aggregation rules
-### Date parsing integrity
-- PASS: parsed-date coverage >= 95%
-- WARN: 90-94%
-- FAIL: < 90%
-
-## Analyst visibility requirements
-UI stage views must show:
-- status,
-- measured values,
-- thresholds,
-- warnings/errors,
-- recommended next action.
-
-## Implementation constraint
-Validation must remain executable with the current lightweight in-repo Python + Gradio architecture.
+## Implementation note
+Current clustering and location extraction are explicitly heuristic and deterministic for reproducibility.

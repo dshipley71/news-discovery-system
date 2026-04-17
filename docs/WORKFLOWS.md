@@ -1,70 +1,101 @@
 # Workflow Operating Manual (In-Repo Runtime)
 
-## 1) Execution model
-The analyst workflow executes entirely in-repo through a single Python entrypoint:
-- `run_workflow(run_input)` in `src/news_app/workflow.py`
+## Execution model
+The analyst workflow executes entirely in-repo through:
+- `run_workflow(run_input)` in `src/news_app/workflow.py`.
 
-No external workflow engine is required for the current production MVP path.
+No external workflow engine is required.
 
-## 2) Stage contracts
+## Stage contracts (Implemented)
+
 ### Stage 0: Intake
-- Inputs: `topic`, `start_date`, `end_date`
-- Validation:
-  - topic is non-empty
-  - start date is not after end date
+Inputs:
+- `topic`
+- `start_date`
+- `end_date`
 
 ### Stage 1: Multi-source ingestion
-- Inputs: run input + `config/sources.json`
-- Behavior:
-  - loads enabled sources
-  - dispatches source adapters via in-repo registry
-  - supports partial source failure (run continues when any source succeeds)
-  - emits source-level telemetry for UI inspection
-- Output:
-  - merged `raw_hits`
-  - `sources_attempted`, `sources_succeeded`, `sources_failed`
-  - `source_runs` with per-source status, count, warnings, error, metadata
+Behavior:
+- Loads enabled source configs.
+- Dispatches source adapters from in-repo registry.
+- Supports partial source failures.
+- Deduplicates records deterministically.
+- Emits canonical lineage duplicate map.
+
+Outputs include:
+- `raw_hits` (deduplicated for downstream)
+- `source_runs`, per-source status/warnings/errors/metadata
+- telemetry including duplicate metrics and duplicate map
 
 ### Stage 2: Normalization
-- Inputs: merged hits
-- Behavior:
-  - validates canonical fields
-  - emits canonical article schema
-  - preserves source attribution per record
-- Output:
-  - `canonical_articles`
-  - `validation_issues`
+Behavior:
+- Validates required fields.
+- Produces canonical article schema.
+- Preserves source attribution.
 
-### Stage 3: Aggregation
-- Inputs: canonical articles
-- Behavior:
-  - computes day-level article counts
-- Output:
-  - `daily_counts`
+Output:
+- `canonical_articles`
+- `validation_issues`
 
-## 3) Ingestion adapter coverage
-- **Reddit:** JSON API + RSS fallback, user-agent, 429 retry
-- **Google News:** RSS ingestion
-- **Web:** DuckDuckGo HTML + 3-pattern regex fallback
-- **GDELT:** DOC 2.0 JSON API
-- **X/Twitter:** optional, skipped when `TWITTER_BEARER_TOKEN` missing
+### Stage 3: Clustering (first-class backend artifact)
+Behavior:
+- Deterministic lexical-token clustering heuristic.
+- Produces cluster confidence, source diversity, and temporal span.
 
-## 4) Analyst-visible run transparency
-The ingestion payload must expose:
-- sources attempted/succeeded/failed
-- per-source article counts
-- per-source warnings/errors
-- per-source metadata
-- duplicate metrics
+Output:
+- `clusters[]`
+- `article_to_cluster`
 
-These fields are required for front-end inspection and auditability.
+### Stage 4: Citation traceability (first-class backend artifact)
+Behavior:
+- Generates citation records tied to canonical article IDs and clusters.
+- Classifies claim support level deterministically.
 
-## 5) Partial failure rules
-- Source-level failures do not terminate full ingestion.
-- Failed/skipped sources must be explicit in output.
-- Full run is only considered failed when no source provides usable output.
+Output:
+- `citations[]`
+- `citation_count`
+- `claim_classification_counts`
+- `by_source`
 
-## 6) Operating assumptions
-- Analysts initiate and inspect runs from the UI.
-- Source configuration remains in `config/sources.json`.
-- Optional credentials are supplied through environment variables when needed.
+### Stage 5: Geospatial extraction/aggregation (first-class backend artifact)
+Behavior:
+- Extracts explicit location mentions from canonical article text.
+- Emits confidence and ambiguity flags.
+- Aggregates map markers by location without duplicate article inflation.
+
+Output:
+- `geospatial.entities[]`
+- `geospatial.map_markers[]`
+
+### Stage 6: Evidence bundles (first-class backend artifact)
+Behavior:
+- Emits explicit backend evidence linkage for:
+  - cluster -> articles
+  - peak day -> clusters -> articles
+  - location -> clusters -> articles
+
+Output:
+- `evidence.cluster_to_articles[]`
+- `evidence.peak_to_clusters_articles[]`
+- `evidence.location_to_clusters_articles[]`
+
+### Stage 7: Warning signal generation
+Behavior:
+- Computes analyst warnings from coverage, duplicates, clustering, geospatial confidence, and citation risk.
+
+Output:
+- `warnings[]`
+
+### Stage 8: Aggregation
+Behavior:
+- Computes day-level counts and exposes geospatial markers in aggregation for UI compatibility.
+
+Output:
+- `daily_counts`
+- `total_days`
+- `aggregation.geospatial.map_markers`
+
+## Deferred
+- Semantic clustering beyond deterministic lexical heuristics.
+- Broad geocoding/resolution pipelines beyond current location lexicon.
+- Full report generation layer.
