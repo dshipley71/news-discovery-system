@@ -52,3 +52,11 @@ Accepted when:
 - major failure families are represented in automated tests,
 - no silent critical failure path remains undocumented or untested,
 - validation behavior is inspectable from workflow output payloads.
+
+## 8) Added regression coverage in this pass
+- Multi-day timeline integrity with explicit unknown-date bucket handling.
+- Reddit fallback behavior when primary JSON returns an empty payload.
+- GDELT adapter transparent failure telemetry vs successful parse path.
+- Validation stop gate for required GDELT failure.
+- Validation stop gate for unknown-date peak bucket.
+- Geospatial location-type separation (`event_location`/`mentioned_location`/`source_location`) and event-only mapping behavior.

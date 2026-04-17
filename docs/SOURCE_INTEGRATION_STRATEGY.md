@@ -86,3 +86,11 @@ This reduces cross-source duplicate inflation while preserving conservative, aud
 - HTML parsing can break when upstream markup changes.
 - Some RSS items have limited metadata.
 - Initial duplicate suppression is intentionally simple and may miss semantic duplicates.
+
+## 2026-04 Backend correction updates
+- **Reddit is first-class and two-stage by contract:** JSON API primary, RSS fallback on both transport failure and empty primary results.
+- Reddit telemetry now records primary/fallback counts, fallback reason (`json_error` or `empty_primary_result`), and final source status.
+- **GDELT is required** in validation: source failure is a stop gate, not a soft warning.
+- GDELT adapter now records request telemetry (`http_status`, `response_bytes`, request parameters, `error_details`) and distinguishes `failed` vs `success with empty result`.
+- GDELT supports optional API key through `GDELT_API_KEY` (or source config `api_key`) while remaining functional without keys.
+- Per-source hard cap defaults were raised and centralized; ingestion no longer enforces the prior low fixed cap.
