@@ -1,220 +1,83 @@
-# Workflow Operating Manual
+# Workflow Operating Manual (In-Repo Execution)
 
 ## 1) Execution Model
-This system supports two architecture patterns:
+This system executes as a single in-repository Python workflow with one entrypoint:
+- `run_workflow(run_input)` in `src/news_app/workflow.py`
 
-## A) Multi-agent (recommended)
-A no-code orchestrator coordinates specialized agents with explicit contracts.
-
-Agents:
-1. Intake Agent
-2. Source Discovery Agent
-3. Retrieval Agent
-4. Normalization Agent
-5. Geospatial Extraction Agent
-6. Geospatial Aggregation Agent
-7. Event Clustering Agent
-8. Temporal Analytics Agent
-9. Narrative Comparison Agent
-10. Evidence & Citation Agent
-11. Report Composer Agent
-12. Critic Agent
-
-## B) Single-orchestrator (simpler alternative)
-One orchestrator executes the same stages as internal modules with identical stage I/O contracts.
+All ingestion and stage orchestration logic remains in-repo for analyst-facing reliability and traceability.
 
 ---
 
-## 2) Stage Contracts (applies to both architectures)
+## 2) Stage Contracts
 ## Stage 0: Intake
-- Inputs: topic, date-window-length (1-30)
-- Outputs: run manifest, normalized query spec
-- Validation rules:
-  - Topic non-empty
-  - End date == current date
-  - Window within 1-30 days
-- Stop conditions: invalid input => fail-fast with UI guidance
+- Inputs: topic, start_date, end_date
+- Output: run input manifest
+- Validation:
+  - topic non-empty
+  - start_date <= end_date
 
-## Stage 1: Source Discovery
-- Inputs: query spec, source catalog, credential status
-- Outputs: source plan (source IDs, query params, fallback order)
-- Validation rules:
-  - At least one active source reachable
-  - Mixed key/non-key coverage allowed
-- Stop conditions:
-  - If zero sources available => fail run
-  - If partial availability => continue with warning
+## Stage 1: Multi-Source Ingestion
+- Inputs: run input + `config/sources.json`
+- Behavior:
+  - loads enabled sources
+  - executes per-source adapters
+  - keeps run alive on partial source failure
+  - captures source telemetry
+- Output:
+  - merged raw hits
+  - `sources_attempted`, `sources_succeeded`, `sources_failed`
+  - per-source status/warnings/errors and count metadata
 
-## Stage 2: Retrieval
-- Inputs: source plan
-- Outputs: raw item set, retrieval logs, source errors
-- Validation rules:
-  - Timestamp and source identity present
-  - Response metadata captured
-- Stop conditions:
-  - Catastrophic retrieval failure threshold exceeded => stop
-  - Otherwise continue as partial success
+## Stage 2: Normalization
+- Inputs: merged raw hits
+- Behavior:
+  - validates canonical fields
+  - emits `canonical_articles`
+  - preserves source attribution per record
+- Output:
+  - canonical set + validation issues
 
-## Stage 3: Normalization
-- Inputs: raw item set
-- Outputs: canonical article records
-- Validation rules:
-  - Required schema fields populated or flagged
-  - Encoding/timezone normalization complete
-- Stop conditions: schema failure rate above threshold => halt for review
-
-## Stage 4: Geospatial Extraction
-- Inputs: canonical article records
-- Outputs: location extraction set (city, region/state, country, coordinates, confidence, extraction method, ambiguity flags)
-- Validation rules:
-  - Every location links to article evidence
-  - Confidence score and extraction method are present
-  - Ambiguous place names are flagged
-- Stop conditions: georesolution capability unavailable => continue in partial mode with clear warning
-
-## Stage 5: Geospatial Aggregation
-- Inputs: location extraction set + canonical article IDs
-- Outputs: location count tables, nearby-location groups, map marker set, legend metadata
-- Validation rules:
-  - Unique article counts per location are deduplicated
-  - Nearby grouping radius and method are logged
-  - Multiple locations per article are preserved without count inflation
-- Stop conditions: if aggregation integrity checks fail, block downstream clustering rerun until fixed
-
-## Stage 6: Event Clustering
-- Inputs: canonical article records + geospatial aggregates
-- Outputs: cluster set with `cluster_id`, `cluster_label`, `article_ids[]`, `source_diversity`, `cluster_confidence`
-- Validation rules:
-  - Every article either assigned or explicitly unassigned
-  - Cluster must have minimum supporting evidence count
-  - Source diversity and cluster confidence are computed and logged
-  - Cluster-to-location linkage is traceable when geospatial signals exist
-- Stop conditions:
-  - Insufficient minimum evidence or severe duplication inflation => fail clustering stage
-  - Weak clusters may continue only if flagged for downstream caution labeling
-
-## Stage 7: Temporal Analytics
-- Inputs: cluster set + publish timestamps
-- Outputs: timeline series, peak/spike/trend detections, peak-to-cluster links
-- Validation rules:
-  - Bucket integrity check
-  - Detection thresholds logged
-  - Every peak links to one or more cluster IDs
-- Stop conditions: low volume => mark insights as low confidence, continue
-
-## Stage 8: Narrative Comparison
-- Inputs: cluster set, source metadata, extracted claims
-- Outputs: narrative matrix (agreement/contradiction/unique)
-- Validation rules:
-  - Claims mapped to supporting evidence
-  - Contradictions cite at least two independent records
-- Stop conditions: insufficient cross-source coverage => downgrade output confidence
-
-## Stage 9: Evidence & Citation Packaging
-- Inputs: all prior stage outputs
-- Outputs:
-  - citation set (`article_id`, `source`, `url`, `publication_date`, `claim_linkage[]`)
-  - evidence bundle index with:
-    - `cluster -> supporting articles`
-    - `peak -> clusters -> articles`
-    - `location -> clusters -> articles`
-- Validation rules:
-  - Every report claim has >=1 citation
-  - Citation metadata completeness check
-  - Evidence bundle link graph is complete and resolvable
-- Stop conditions: unmapped claims or broken bundle edges => block report publication
-
-## Stage 10: Report Composition
-- Inputs: packaged evidence and analytical summaries
-- Outputs: final report draft, export artifacts
-- Validation rules:
-  - Required report sections present
-  - Uncertainty and limitations section populated
-- Stop conditions: missing mandatory section => block finalization
-
-## Stage 11: Critic Loop (bounded)
-- Inputs: report draft + validation findings
-- Outputs: refined report revisions, critique log
-- Process:
-  - Max refinement count default = 2
-  - Stop early if quality target met
-- Validation rules:
-  - Revisions cannot remove citation coverage
-  - Confidence regressions must be explained
-- Stop conditions:
-  - Max iterations reached
-  - Or all critical checks pass
+## Stage 3: Aggregation
+- Inputs: canonical articles
+- Behavior:
+  - computes day-level article counts
+- Output:
+  - daily timeline buckets
 
 ---
 
-## 3) Handoffs and Data Contracts
-Every handoff must include:
-- Run ID
-- Stage ID
-- Input artifact IDs
-- Output artifact IDs
-- Validation result set
-- Confidence summary
-- Timestamp and actor (agent/module)
+## 3) Source Adapter Behavior
+Adapters are registered by source ID and implement source-specific fetch behavior.
 
-## 4) Confidence and Source Weighting
-## Confidence dimensions
-- Source reliability
-- Cross-source corroboration
-- Temporal consistency
-- Extraction certainty
-- Geospatial certainty (resolution confidence + ambiguity penalties)
-- Cluster coherence and source diversity
-- Contradiction pressure
+Current adapters:
+1. Reddit: JSON API + RSS fallback, user-agent, retry on 429
+2. Google News: RSS search feed
+3. Web: DuckDuckGo HTML with 3-pattern extraction fallback
+4. GDELT: DOC 2.0 JSON API
+5. X/Twitter: optional; skipped when `TWITTER_BEARER_TOKEN` missing
 
-## Source weighting rules
-- Admin-configurable source tiers.
-- Weight contributes to claim confidence, not claim truth guarantee.
-- Contradictory high-weight sources increase uncertainty flags.
+---
 
-## 5) Special Condition Handling
-## Sparse coverage
-- Trigger: low article count below threshold.
-- Behavior: continue with low-confidence labels and explicit caution text.
+## 4) Analyst-Visible Telemetry Requirements
+The ingestion output must expose:
+- attempted/success/failed source lists,
+- per-source article counts,
+- per-source warnings,
+- source-level error details,
+- ingestion duplicate metrics.
 
-## Noisy coverage
-- Trigger: high duplicate/near-duplicate ratio, weak signal.
-- Behavior: apply stricter dedupe and clustering thresholds; expose noise metrics.
+This telemetry is required for run inspection in UI panels.
 
-## Contradictory coverage
-- Trigger: competing claims for same event attributes.
-- Behavior: split claim sets, label unresolved contradictions, avoid forced synthesis.
+---
 
-## Breaking-news spikes
-- Trigger: abrupt short-interval count surge.
-- Behavior: mark as developing; schedule auto-refresh run suggestion.
+## 5) Partial Failure Rules
+- Any individual source can fail without failing full run.
+- Failed/skipped sources are explicitly recorded.
+- Run fails only if no usable articles are produced and no source succeeded.
 
-## 6) UI-First Operating Procedure
-1. Analyst opens Run Builder.
-2. Enters topic + date-window length.
-3. Starts run.
-4. Monitors stage progression in Run Monitor.
-5. Reviews artifacts in Stage Detail panels.
-6. Inspects timeline/map/narrative tabs.
-7. Uses map drill path: location → cluster → articles.
-8. Reviews critic loop deltas.
-9. Exports final report + evidence bundle.
+---
 
-## 7) Minimal-Code Boundary
-- Preferred: implement these stages with no-code workflow nodes and connectors.
-- Allowed custom code only for:
-  - Unavailable connector adapters
-  - Specialized geospatial disambiguation not supported by platform
-  - Specialized clustering primitives not supported by platform
-  - Evidence graph serialization utility
-All custom code must remain small, isolated, and documented before implementation.
-
-## 8) Assumptions
-- Source catalog and credential vault are available to orchestration layer.
-- Chosen no-code platform can persist stage artifacts and metadata.
-
-## 9) Open Decisions
-1. Default geospatial proximity radius for aggregation.
-2. Exact clustering strategy and thresholds.
-3. Temporal spike/trend parameter defaults.
-4. Critic quality gates and pass criteria tuning.
+## 6) Assumptions
+- Analysts run all stages from front end.
+- Source config stays in `config/sources.json`.
+- Environment secrets are provided only for optional sources when needed.
