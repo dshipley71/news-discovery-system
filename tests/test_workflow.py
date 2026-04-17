@@ -454,3 +454,92 @@ def test_validation_detects_missing_artifact_contract() -> None:
 
     failed_rule_ids = {event["rule_id"] for event in validation["events"] if event["status"] == "fail"}
     assert "FM-011-silent-ui-degradation" in failed_rule_ids
+
+
+def test_aggregation_consistency_matches_normalized_total() -> None:
+    canonical = [
+        {"article_id": "a1", "title": "one", "url": "u1", "published_at": "20260410093000", "source": "gdelt"},
+        {"article_id": "a2", "title": "two", "url": "u2", "published_at": "20260410T183000Z", "source": "gdelt"},
+        {"article_id": "a3", "title": "three", "url": "u3", "published_at": "2026-04-11T03:00:00Z", "source": "reddit"},
+    ]
+
+    counts = aggregate_daily_counts(canonical)
+
+    assert sum(point["article_count"] for point in counts) == len(canonical)
+    assert len(counts) == 2
+
+
+def test_parse_date_buckets_multi_day_for_gdelt_format() -> None:
+    parsed_1 = workflow._parse_date("20260410093000")
+    parsed_2 = workflow._parse_date("20260412001500")
+
+    assert parsed_1 is not None
+    assert parsed_2 is not None
+    assert parsed_1.date().isoformat() == "2026-04-10"
+    assert parsed_2.date().isoformat() == "2026-04-12"
+
+
+def test_source_failure_reporting_distinguishes_skipped_and_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_input = RunInput(topic="signal", start_date=date(2026, 4, 1), end_date=date(2026, 4, 17))
+
+    monkeypatch.setattr(
+        workflow,
+        "_load_source_configs",
+        lambda: [{"id": "twitter", "label": "Twitter"}, {"id": "reddit", "label": "Reddit"}],
+    )
+    monkeypatch.setattr(
+        workflow,
+        "SOURCE_ADAPTER_REGISTRY",
+        {
+            "twitter": lambda s, c, r, m: workflow.SourceResult(
+                source_id="twitter",
+                source_label="Twitter",
+                status="skipped",
+                articles=[],
+                warnings=["missing_twitter_bearer_token"],
+                error="missing token",
+            ),
+            "reddit": lambda s, c, r, m: workflow.SourceResult(
+                source_id="reddit",
+                source_label="Reddit",
+                status="success",
+                articles=[],
+                warnings=[],
+            ),
+        },
+    )
+
+    ingestion = ingest_articles(run_input)
+
+    assert "twitter" in ingestion["sources_failed"]
+    assert ingestion["sources_skipped"] == ["twitter"]
+    assert ingestion["sources_empty"] == ["reddit"]
+
+
+def test_cluster_distribution_groups_related_articles() -> None:
+    canonical = [
+        {"article_id": "a1", "title": "London transit strike causes delays", "snippet": "Commuters face major strike delays", "source": "s1", "published_at": "2026-04-10T01:00:00Z"},
+        {"article_id": "a2", "title": "Major strike disrupts London transit", "snippet": "London commuters report delays", "source": "s2", "published_at": "2026-04-10T04:00:00Z"},
+        {"article_id": "a3", "title": "Transit disruption expands in London", "snippet": "Strike enters second day", "source": "s3", "published_at": "2026-04-11T01:00:00Z"},
+        {"article_id": "b1", "title": "Tokyo markets rally on export data", "snippet": "Stocks rise in Tokyo session", "source": "s1", "published_at": "2026-04-10T03:00:00Z"},
+        {"article_id": "b2", "title": "Export optimism lifts Tokyo stocks", "snippet": "Tokyo benchmark closes higher", "source": "s2", "published_at": "2026-04-11T03:00:00Z"},
+    ]
+
+    clustering = workflow._build_clusters(canonical)
+    cluster_sizes = sorted([len(cluster["article_ids"]) for cluster in clustering["clusters"]], reverse=True)
+
+    assert len(clustering["clusters"]) <= 3
+    assert cluster_sizes[0] >= 3
+
+
+def test_geospatial_population_multiple_markers() -> None:
+    canonical = [
+        {"article_id": "a1", "title": "London response update", "snippet": "London officials briefed", "source": "s", "published_at": "2026-04-10T00:00:00Z"},
+        {"article_id": "a2", "title": "Paris transport disruption", "snippet": "Parisians report delays", "source": "s", "published_at": "2026-04-10T00:00:00Z"},
+        {"article_id": "a3", "title": "Tokyo market response", "snippet": "Tokyo traders react quickly", "source": "s", "published_at": "2026-04-10T00:00:00Z"},
+    ]
+
+    geo = workflow._extract_geospatial_entities(canonical)
+
+    assert len(geo["entities"]) >= 3
+    assert len(geo["map_markers"]) >= 3

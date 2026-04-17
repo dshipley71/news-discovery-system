@@ -19,6 +19,9 @@ Validate that the in-repo Gradio + Colab workflow handles analyst-critical failu
 |---|---|---|
 | Duplicate article inflation | Existing + warning tests | WARN at elevated duplicates; STOP at severe ratio |
 | Source-specific failure | Existing ingestion failure tests | WARN partial failure; STOP if all fail |
+| Source status classification (failed/skipped/empty) | `test_source_failure_reporting_distinguishes_skipped_and_empty` | Distinct ingestion status lists remain inspectable |
+| Aggregation consistency | `test_aggregation_consistency_matches_normalized_total` | Timeline total equals normalized valid count |
+| Multi-day date bucketing | `test_parse_date_buckets_multi_day_for_gdelt_format` | GDELT/compact timestamps resolve to correct day buckets |
 | Rate limiting/backoff | `test_reddit_retry_and_rss_fallback`, validation warning test | WARN with retry metadata |
 | Empty ingestion | `test_validation_stop_on_empty_ingestion` | STOP |
 | Schema drift across sources | Existing schema consistency + normalization counts | WARN/STOP by invalid ratio |
@@ -26,8 +29,11 @@ Validate that the in-repo Gradio + Colab workflow handles analyst-critical failu
 | Misleading timeline spikes | Validation logic checks (rule FM-007) | WARN |
 | Low-confidence geospatial inference | Existing warning generation test + validation FM-008 | WARN |
 | Weak/duplicate-heavy clusters | Existing warning generation test + validation FM-009 | WARN |
+| Cluster fragmentation sanity | `test_cluster_distribution_groups_related_articles` | Related headlines merge into non-singleton clusters |
+| Geospatial artifact population | `test_geospatial_population_multiple_markers` | Multi-location evidence yields multiple map markers |
 | Missing/weak citations | Existing citation artifact tests + validation FM-010 | WARN/STOP |
 | Silent UI degradation on missing artifacts | `test_validation_detects_missing_artifact_contract` | STOP |
+| Timeline mismatch trust gate | Validation logic checks (rule FM-012) | STOP |
 
 ## 5) Regression commands
 1. `pytest tests/test_workflow.py`
