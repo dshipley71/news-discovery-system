@@ -7,7 +7,9 @@
       "enabled": true,
       "endpoint": "https://www.reddit.com/search.json",
       "rss_fallback": "https://www.reddit.com/search.rss",
-      "user_agent": "news-discovery-system/1.0"
+      "user_agent": "news-discovery-system/1.0",
+      "retry_on_429": true,
+      "max_attempts": 3
     },
     {
       "id": "google_news",
@@ -35,7 +37,8 @@
       "label": "X/Twitter Search",
       "type": "optional_api",
       "enabled": true,
-      "endpoint": "https://api.twitter.com/2/tweets/search/recent"
+      "endpoint": "https://api.twitter.com/2/tweets/search/recent",
+      "required_env": "TWITTER_BEARER_TOKEN"
     }
   ]
 }

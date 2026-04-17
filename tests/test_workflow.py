@@ -62,6 +62,10 @@ def test_multiple_source_merge_behavior(monkeypatch: pytest.MonkeyPatch) -> None
     assert set(ingestion["sources_succeeded"]) == {"reddit", "google_news"}
     assert ingestion["hits_count"] == 1
     assert ingestion["telemetry"]["ingestion_duplicate_count"] == 1
+    assert ingestion["telemetry"]["per_source_status"] == {
+        "reddit": "success",
+        "google_news": "success",
+    }
 
 
 def test_partial_source_failure_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,6 +97,7 @@ def test_partial_source_failure_behavior(monkeypatch: pytest.MonkeyPatch) -> Non
     gdelt_run = next(item for item in ingestion["source_runs"] if item["source_id"] == "gdelt")
     assert gdelt_run["status"] == "failed"
     assert gdelt_run["error"]
+    assert gdelt_run["metadata"] == {}
 
 
 def test_twitter_disabled_when_token_missing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -108,6 +113,7 @@ def test_twitter_disabled_when_token_missing(monkeypatch: pytest.MonkeyPatch) ->
     assert result.status == "skipped"
     assert result.articles == []
     assert "missing_twitter_bearer_token" in result.warnings
+    assert result.metadata == {"fetch_mode": "twitter_api_v2", "token_present": False}
 
 
 def test_schema_consistency_across_sources() -> None:
@@ -201,6 +207,7 @@ def test_reddit_retry_and_rss_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(result.articles) == 1
     assert result.articles[0]["source"] == "reddit"
     assert any("json_api_failed" in warning for warning in result.warnings)
+    assert result.metadata["used_rss_fallback"] is True
 
 
 def test_aggregate_daily_counts_groups_by_day() -> None:
