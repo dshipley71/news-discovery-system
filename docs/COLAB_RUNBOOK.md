@@ -1,37 +1,44 @@
 # COLAB_RUNBOOK
 
 ## Purpose
-Run the analyst dashboard in Google Colab using the repository workflow and Gradio launch with `share=True`.
+Run the Gradio analyst review dashboard in Google Colab with backend artifact-driven panels.
 
-## Launch (Colab)
+## Launch in Colab
 1. Open `notebooks/news_discovery_colab.ipynb`.
 2. Run setup/install cells.
-3. Ensure the launch cell runs `demo.launch(share=True, inline=False, debug=True)`.
-4. Open the public Gradio URL.
+3. Confirm launch cell runs Gradio app with `share=True`.
+4. Open generated public Gradio URL.
 
-## Analyst Workflow in Colab UI
-1. Enter `topic`, `start_date`, `end_date`.
-2. Click **Run Workflow**.
-3. Review **Workflow Status** and **Run Summary**.
-4. Inspect:
-   - Timeline plot + trend summary,
-   - Geospatial map + marker table,
-   - Cluster summary/detail + membership,
-   - Citation index/records + evidence bundle,
-   - Raw stage outputs in validation accordion.
+## Analyst Execution Flow (UI-Only)
+1. Set `Topic`, `Start date`, and `End date` in Control Panel.
+2. (Optional) keep default `Dark` theme or switch to `Light`.
+3. Click **Run Workflow**.
+4. Review **Run Summary & Warnings**:
+   - run id
+   - date range
+   - source totals
+   - article totals
+   - cluster totals
+   - geospatial totals
+   - analyst warnings / partial failures
 
-## Expected Behavior
-- Dashboard remains fully usable from browser (no CLI needed for analysts).
-- If workflow lacks geospatial/cluster/citation data for a run, panels show explicit no-data/empty states and warnings.
-- Input validation failures are shown immediately in status/summary.
+5. Review dashboard regions:
+   - **Timeline panel**: daily counts, trend summary, peak drill-down
+   - **Geospatial panel**: markers, confidence/ambiguity cues, location drill-down
+   - **Cluster explorer**: cluster summary, details, membership, diversity/duplicate indicators
+   - **Citation / Evidence explorer**: citation index, citation rows, bundle rows
+   - **Validation panels**: ingestion, normalization, aggregation, cluster, geospatial, warning payloads
 
-## Validation Checks for Colab
-- Confirm run summary includes run ID and counts.
-- Confirm timeline values match `aggregation.daily_counts`.
-- Confirm cluster and citation tables reference real article IDs from normalization output.
-- Confirm map panel only shows markers when coordinate-bearing records are present.
+## Colab Validation Checklist
+- Run summary numbers align with payload data.
+- Timeline drill-down links peak day to clusters/articles.
+- Map drill-down links location to clusters/articles.
+- Cluster membership references real article IDs.
+- Citation/evidence records are artifact-backed.
+- Warnings are explicit for missing or partial outputs.
 
 ## Known Colab Constraints
-- First launch may be slower due to environment cold start.
-- External source/network availability affects ingestion results.
-- Geospatial panel may be empty when upstream artifacts do not include coordinates.
+- First run can be slower due to cold start.
+- External source availability/rate limiting may produce partial source failures.
+- Geospatial panel may legitimately remain empty when no location-bearing entities are extracted.
+- Browser rendering differences may affect map interactivity but should not affect payload traceability.
