@@ -135,3 +135,21 @@ For every WARN/STOP event, show in UI:
 
 ## Notes
 This repository intentionally keeps controls lightweight and in-repo. No external orchestration dependency is required for trust gating.
+
+### FM-013 Required GDELT source failure
+- **Description:** GDELT is mandatory and cannot be treated as optional coverage.
+- **Detection rule:** STOP when GDELT source status is not `success`.
+- **Analyst-visible signal:** Validation failure includes GDELT status + error details.
+- **Fallback behavior:** Keep run inspectable, block publish.
+
+### FM-014 Unknown-date peak
+- **Description:** Timeline peak on `unknown` can mislead temporal conclusions.
+- **Detection rule:** STOP when highest-volume timeline bucket is `unknown`.
+- **Analyst-visible signal:** Validation failure includes `peak_days` and `peak_count`.
+- **Fallback behavior:** Require date parsing correction before publication.
+
+### FM-015 Missing event-location geospatial output
+- **Description:** Map cannot be trusted when only source/publisher locations exist.
+- **Detection rule:** STOP for non-trivial runs when `event_location` extraction is empty.
+- **Analyst-visible signal:** Validation failure naming event-location coverage gap.
+- **Fallback behavior:** Continue inspection but block publish claims tied to geography.

@@ -1,4 +1,5 @@
 from datetime import date
+import json
 from pathlib import Path
 import sys
 
@@ -352,7 +353,11 @@ def test_geospatial_artifacts_presence_and_absence(monkeypatch: pytest.MonkeyPat
     })
 
     without_geo = run_workflow(run_input)
-    assert without_geo["stages"]["geospatial"]["entities"] == []
+    assert without_geo["stages"]["geospatial"]["entities"]
+    assert all(
+        entity["location_type"] == "source_location"
+        for entity in without_geo["stages"]["geospatial"]["entities"]
+    )
     assert without_geo["stages"]["aggregation"]["geospatial"]["map_markers"] == []
 
 
@@ -543,3 +548,124 @@ def test_geospatial_population_multiple_markers() -> None:
 
     assert len(geo["entities"]) >= 3
     assert len(geo["map_markers"]) >= 3
+    assert all(marker["location_label"] for marker in geo["map_markers"])
+    assert all(entity["location_type"] in {"event_location", "mentioned_location", "source_location"} for entity in geo["entities"])
+
+
+def test_timeline_multi_day_and_unknown_handling() -> None:
+    normalized = workflow.normalize_articles(
+        [
+            {"article_id": "a1", "title": "One", "url": "https://a1", "published_at": "2026-04-10T01:00:00Z", "source": "reddit"},
+            {"article_id": "a2", "title": "Two", "url": "https://a2", "published_at": "20260412093000", "source": "gdelt"},
+            {"article_id": "a3", "title": "Three", "url": "https://a3", "published_at": "not-a-date", "source": "google_news"},
+        ]
+    )
+    counts = aggregate_daily_counts(normalized["canonical_articles"])
+    by_day = {row["day"]: row["article_count"] for row in counts}
+
+    assert by_day["2026-04-10"] == 1
+    assert by_day["2026-04-12"] == 1
+    assert by_day["unknown"] == 1
+
+
+def test_reddit_fallback_triggers_on_empty_primary(monkeypatch: pytest.MonkeyPatch) -> None:
+    class MockResponse:
+        def __init__(self, status_code=200, json_payload=None, text="", headers=None):
+            self.status_code = status_code
+            self._json_payload = json_payload or {}
+            self.text = text
+            self.headers = headers or {}
+
+        def json(self):
+            return self._json_payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise workflow.requests.HTTPError(f"status={self.status_code}")
+
+    class MockSession:
+        def get(self, url, params=None, headers=None, timeout=20):
+            if "search.json" in url:
+                return MockResponse(status_code=200, json_payload={"data": {"children": []}})
+            return MockResponse(
+                status_code=200,
+                text="<rss><channel><item><title>X</title><link>https://example.com/x</link><pubDate>Thu, 16 Apr 2026 10:00:00 +0000</pubDate></item></channel></rss>",
+            )
+
+    result = workflow.fetch_reddit(
+        session=MockSession(),
+        source={"id": "reddit", "label": "Reddit", "endpoint": "https://reddit.com/search.json", "rss_fallback": "https://reddit.com/search.rss"},
+        run_input=RunInput(topic="ai", start_date=date(2026, 4, 1), end_date=date(2026, 4, 17)),
+        max_records=10,
+    )
+
+    assert result.status == "success"
+    assert result.metadata["used_rss_fallback"] is True
+    assert result.metadata["fallback_reason"] == "empty_primary_result"
+    assert result.metadata["fallback_result_count"] == 1
+
+
+def test_gdelt_transparent_failure_and_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    class MockResponse:
+        def __init__(self, status_code=200, payload=None):
+            self.status_code = status_code
+            self._payload = payload or {}
+            self.text = json.dumps(self._payload)
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise workflow.requests.HTTPError(f"status={self.status_code}")
+
+    class FailingSession:
+        def get(self, url, params=None, headers=None, timeout=20):
+            return MockResponse(status_code=503, payload={"status": "error"})
+
+    failed = workflow.fetch_gdelt(
+        session=FailingSession(),
+        source={"id": "gdelt", "label": "GDELT", "endpoint": "https://gdelt"},
+        run_input=RunInput(topic="energy", start_date=date(2026, 4, 1), end_date=date(2026, 4, 17)),
+        max_records=20,
+    )
+    assert failed.status == "failed"
+    assert failed.metadata["http_status"] == 503
+    assert failed.error
+
+    class SuccessSession:
+        def get(self, url, params=None, headers=None, timeout=20):
+            return MockResponse(
+                status_code=200,
+                payload={"articles": [{"title": "A", "url": "https://example.com/a", "seendate": "20260410120000", "domain": "example.com"}]},
+            )
+
+    success = workflow.fetch_gdelt(
+        session=SuccessSession(),
+        source={"id": "gdelt", "label": "GDELT", "endpoint": "https://gdelt"},
+        run_input=RunInput(topic="energy", start_date=date(2026, 4, 1), end_date=date(2026, 4, 17)),
+        max_records=20,
+    )
+    assert success.status == "success"
+    assert len(success.articles) == 1
+    assert success.metadata["http_status"] == 200
+
+
+def test_validation_stops_on_unknown_peak_and_required_gdelt_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_input = RunInput(topic="integrity", start_date=date(2026, 4, 1), end_date=date(2026, 4, 17))
+    monkeypatch.setattr(workflow, "ingest_articles", lambda _: {
+        "raw_hits": [{"article_id": "a1", "title": "A", "url": "https://x", "published_at": "unknown-value", "source": "reddit"}],
+        "hits_count": 1,
+        "source_runs": [
+            {"source_id": "reddit", "status": "success", "metadata": {}, "warnings": []},
+            {"source_id": "gdelt", "status": "failed", "metadata": {"http_status": 500}, "warnings": [], "error": "boom"},
+        ],
+        "sources_attempted": ["reddit", "gdelt"],
+        "sources_succeeded": ["reddit"],
+        "sources_failed": ["gdelt"],
+        "telemetry": {"ingestion_duplicate_ratio": 0.0, "duplicate_map": []},
+    })
+    result = run_workflow(run_input)
+    failed_rules = {event["rule_id"] for event in result["stages"]["validation"]["events"] if event["status"] == "fail"}
+    assert "FM-013-required-gdelt-source" in failed_rules
+    assert "FM-014-unknown-date-peak" in failed_rules

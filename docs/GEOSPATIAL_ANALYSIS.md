@@ -51,3 +51,20 @@ Ambiguous locations are flagged in entity and marker artifacts and feed warning 
 ## Deferred
 - Expanded resolver/geocoder coverage.
 - Rich inferred-location strategy beyond explicit lexical matches.
+
+## 2026-04 Semantic location model update
+Implemented explicit location types:
+- `event_location` (primary map driver)
+- `source_location` (publisher/domain provenance, **not** a default map marker)
+- `mentioned_location` (non-primary text mentions)
+
+Additional contract fields:
+- `location_type`
+- `geocode_status` (`extracted`, `inferred`, `unresolved`)
+
+Map behavior:
+- `stages.geospatial.map_markers[]` are derived from `event_location` entities only.
+- All marker records preserve article and location evidence linkage for traceability.
+
+Future hook:
+- `stages.geospatial.llm_geocode_hook` is a placeholder contract for a future LLM enrichment stage.

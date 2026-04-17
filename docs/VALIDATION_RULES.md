@@ -67,3 +67,12 @@ A run is publish-safe only when:
 
 ## Lightweight implementation principle
 Rules stay in-repo and deterministic; thresholds are explicit constants/conditions, not hidden heuristics.
+
+## Additional enforced gates (2026-04)
+| Rule ID | Failure mode | Status trigger | Enforceable threshold |
+|---|---|---|---|
+| FM-013-required-gdelt-source | Required GDELT source unavailable | fail | fail if GDELT source status != success |
+| FM-014-unknown-date-peak | Timeline date integrity failure | fail | fail if peak day resolves to `unknown` |
+| FM-015-missing-event-geospatial | Invalid map semantics | fail | fail when non-trivial run has zero `event_location` entities |
+
+These rules strengthen publish safety when analyst trust would otherwise be overstated.

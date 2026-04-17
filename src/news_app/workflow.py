@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 import hashlib
@@ -86,7 +86,7 @@ class SourceResult:
     metadata: dict[str, Any] | None = None
 
 
-SourceFetcher = Callable[[requests.Session, dict[str, Any], RunInput, int], SourceResult]
+SourceFetcher = Callable[[requests.Session, dict[str, Any], RunInput, int | None], SourceResult]
 
 
 STOPWORDS = {
@@ -288,6 +288,14 @@ def _normalize_article(source_id: str, source_label: str, raw: dict[str, Any]) -
     }
 
 
+def _resolve_max_records(max_records: int | None, source: dict[str, Any], default: int = 250) -> int:
+    if source.get("max_records"):
+        return int(source["max_records"])
+    if max_records is None:
+        return default
+    return max(1, int(max_records))
+
+
 def _extract_rss_items(content: str) -> list[dict[str, str]]:
     root = ET.fromstring(content)
     items: list[dict[str, str]] = []
@@ -307,15 +315,21 @@ def fetch_reddit(
     session: requests.Session,
     source: dict[str, Any],
     run_input: RunInput,
-    max_records: int,
+    max_records: int | None,
 ) -> SourceResult:
     source_id = source["id"]
     source_label = source["label"]
     warnings: list[str] = []
+    resolved_max_records = _resolve_max_records(max_records, source, default=200)
 
     headers = {"User-Agent": source.get("user_agent", "news-discovery-system/1.0")}
     json_url = source["endpoint"]
-    json_params = {"q": run_input.topic, "sort": "new", "t": "all", "limit": max_records}
+    resolved_max_records = _resolve_max_records(max_records, source, default=100)
+    json_params = {"q": run_input.topic, "sort": "new", "t": "all", "limit": min(resolved_max_records, 100)}
+    primary_items: list[dict[str, Any]] = []
+    fallback_items: list[dict[str, Any]] = []
+    fallback_reason: str | None = None
+    retry_meta: dict[str, Any] = {"attempts": 0, "retried_429": False}
 
     try:
         response, retry_meta = _request_with_429_retry(
@@ -327,10 +341,9 @@ def fetch_reddit(
         )
         payload = response.json()
         children = payload.get("data", {}).get("children", [])
-        raw_items = []
         for child in children:
             data = child.get("data", {})
-            raw_items.append(
+            primary_items.append(
                 {
                     "title": data.get("title"),
                     "url": data.get("url"),
@@ -343,9 +356,14 @@ def fetch_reddit(
                     "raw_source": "reddit_json",
                 }
             )
+        if not primary_items:
+            fallback_reason = "empty_primary_result"
+            warnings.append("json_api_empty_result")
     except Exception as exc:  # fallback path on transport/rate errors
+        fallback_reason = "json_error"
         warnings.append(f"json_api_failed:{exc}")
-        retry_meta = {"attempts": 0, "retried_429": False}
+
+    if fallback_reason:
         rss_response = session.get(
             source.get("rss_fallback"),
             params={"q": run_input.topic, "sort": "new"},
@@ -353,7 +371,7 @@ def fetch_reddit(
             timeout=20,
         )
         rss_response.raise_for_status()
-        raw_items = [
+        fallback_items = [
             {
                 **item,
                 "external_id": item.get("url"),
@@ -361,6 +379,10 @@ def fetch_reddit(
             }
             for item in _extract_rss_items(rss_response.text)
         ]
+        if not fallback_items:
+            warnings.append("rss_fallback_empty_result")
+
+    raw_items = primary_items or fallback_items
 
     canonical = [
         _normalize_article(source_id, source_label, item)
@@ -378,7 +400,11 @@ def fetch_reddit(
             "fetch_mode": "reddit_json_with_rss_fallback",
             "json_retry_attempts": retry_meta["attempts"],
             "json_retried_429": retry_meta["retried_429"],
-            "used_rss_fallback": any("json_api_failed" in warning for warning in warnings),
+            "primary_result_count": len(primary_items),
+            "fallback_result_count": len(fallback_items),
+            "fallback_reason": fallback_reason,
+            "used_rss_fallback": bool(fallback_reason),
+            "final_status": "success" if raw_items else "empty",
         },
     )
 
@@ -387,7 +413,7 @@ def fetch_google_news(
     session: requests.Session,
     source: dict[str, Any],
     run_input: RunInput,
-    max_records: int,
+    max_records: int | None,
 ) -> SourceResult:
     source_id = source["id"]
     source_label = source["label"]
@@ -395,7 +421,8 @@ def fetch_google_news(
     url = source["endpoint"].format(query=quote_plus(run_input.topic))
     response = session.get(url, timeout=20)
     response.raise_for_status()
-    raw_items = _extract_rss_items(response.text)[:max_records]
+    resolved_max_records = _resolve_max_records(max_records, source, default=250)
+    raw_items = _extract_rss_items(response.text)[:resolved_max_records]
 
     canonical = [
         _normalize_article(
@@ -425,7 +452,7 @@ def fetch_web_duckduckgo(
     session: requests.Session,
     source: dict[str, Any],
     run_input: RunInput,
-    max_records: int,
+    max_records: int | None,
 ) -> SourceResult:
     source_id = source["id"]
     source_label = source["label"]
@@ -465,7 +492,7 @@ def fetch_web_duckduckgo(
 
     canonical = [
         _normalize_article(source_id, source_label, item)
-        for item in extracted[:max_records]
+        for item in extracted[:resolved_max_records]
         if _in_date_window(item.get("published_at"), run_input)
     ]
     canonical_items = [item for item in canonical if item]
@@ -489,23 +516,49 @@ def fetch_gdelt(
     session: requests.Session,
     source: dict[str, Any],
     run_input: RunInput,
-    max_records: int,
+    max_records: int | None,
 ) -> SourceResult:
     source_id = source["id"]
     source_label = source["label"]
 
-    payload = _safe_get_json(
-        session,
-        source["endpoint"],
-        params={
-            "query": run_input.topic,
-            "mode": "ArtList",
-            "format": "json",
-            "maxrecords": max_records,
-            "startdatetime": run_input.start_date.strftime("%Y%m%d000000"),
-            "enddatetime": run_input.end_date.strftime("%Y%m%d235959"),
-        },
-    )
+    resolved_max_records = _resolve_max_records(max_records, source, default=250)
+    params = {
+        "query": run_input.topic,
+        "mode": "ArtList",
+        "format": "json",
+        "maxrecords": resolved_max_records,
+        "startdatetime": run_input.start_date.strftime("%Y%m%d000000"),
+        "enddatetime": run_input.end_date.strftime("%Y%m%d235959"),
+    }
+    api_key = os.getenv("GDELT_API_KEY") or source.get("api_key")
+    if api_key:
+        params["key"] = api_key
+
+    metadata: dict[str, Any] = {
+        "fetch_mode": "gdelt_doc_2_json",
+        "request_params": {key: value for key, value in params.items() if key != "key"},
+        "api_key_provided": bool(api_key),
+        "http_status": None,
+        "response_bytes": 0,
+    }
+    warnings: list[str] = []
+    try:
+        response = session.get(source["endpoint"], params=params, timeout=20)
+        metadata["http_status"] = response.status_code
+        metadata["response_bytes"] = len(response.text.encode("utf-8", errors="ignore"))
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        metadata["error_details"] = str(exc)
+        return SourceResult(
+            source_id=source_id,
+            source_label=source_label,
+            status="failed",
+            articles=[],
+            warnings=["gdelt_request_failed"],
+            error=str(exc),
+            metadata=metadata,
+        )
 
     raw_items = []
     for item in payload.get("articles", []):
@@ -526,13 +579,16 @@ def fetch_gdelt(
         if _in_date_window(item.get("published_at"), run_input)
     ]
 
+    if not raw_items:
+        warnings.append("gdelt_empty_result")
+
     return SourceResult(
         source_id=source_id,
         source_label=source_label,
         status="success",
         articles=[item for item in canonical if item],
-        warnings=[],
-        metadata={"fetch_mode": "gdelt_doc_2_json"},
+        warnings=warnings,
+        metadata=metadata,
     )
 
 
@@ -540,7 +596,7 @@ def fetch_twitter(
     session: requests.Session,
     source: dict[str, Any],
     run_input: RunInput,
-    max_records: int,
+    max_records: int | None,
 ) -> SourceResult:
     source_id = source["id"]
     source_label = source["label"]
@@ -557,12 +613,13 @@ def fetch_twitter(
             metadata={"fetch_mode": "twitter_api_v2", "token_present": False},
         )
 
+    resolved_max_records = _resolve_max_records(max_records, source, default=100)
     payload = _safe_get_json(
         session,
         source["endpoint"],
         params={
             "query": run_input.topic,
-            "max_results": min(max_records, 100),
+            "max_results": min(resolved_max_records, 100),
             "tweet.fields": "created_at,author_id",
         },
         headers={"Authorization": f"Bearer {token}"},
@@ -685,19 +742,39 @@ def _build_clusters(canonical_articles: list[dict[str, Any]]) -> dict[str, Any]:
     cluster_groups: list[dict[str, Any]] = []
     for article in sorted(canonical_articles, key=lambda row: row["article_id"]):
         tokens = _article_cluster_tokens(article)
+        article_dt = _parse_date(article.get("published_at"))
         best_cluster: dict[str, Any] | None = None
-        best_overlap = 0.0
+        best_score = 0.0
+
         for cluster in cluster_groups:
-            overlap = _token_overlap(tokens, cluster["token_centroid"])
-            if overlap > best_overlap:
-                best_overlap = overlap
+            profile_tokens = set(token for token, _ in cluster["token_profile"].most_common(12))
+            lexical_overlap = _token_overlap(tokens, profile_tokens)
+            day_gap = 999
+            if article_dt and cluster["latest_dt"]:
+                day_gap = abs((article_dt.date() - cluster["latest_dt"].date()).days)
+            temporal_score = 1.0 if day_gap <= 1 else (0.5 if day_gap <= 3 else 0.0)
+            source_bonus = 0.05 if article.get("source") not in cluster["sources"] else 0.0
+            score = lexical_overlap + source_bonus + (0.15 * temporal_score)
+            if score > best_score:
+                best_score = score
                 best_cluster = cluster
-        intersection_size = len(tokens.intersection(best_cluster["token_centroid"])) if best_cluster else 0
-        if best_cluster and (best_overlap >= 0.34 or intersection_size >= 2):
+
+        if best_cluster and best_score >= 0.35:
             best_cluster["members"].append(article)
-            best_cluster["token_centroid"].update(tokens)
+            best_cluster["token_profile"].update(tokens)
+            if article.get("source"):
+                best_cluster["sources"].add(article.get("source"))
+            if article_dt and (best_cluster["latest_dt"] is None or article_dt > best_cluster["latest_dt"]):
+                best_cluster["latest_dt"] = article_dt
         else:
-            cluster_groups.append({"members": [article], "token_centroid": set(tokens)})
+            cluster_groups.append(
+                {
+                    "members": [article],
+                    "token_profile": Counter(tokens),
+                    "sources": {article.get("source")} if article.get("source") else set(),
+                    "latest_dt": article_dt,
+                }
+            )
 
     clusters: list[dict[str, Any]] = []
     article_to_cluster: dict[str, str] = {}
@@ -706,7 +783,7 @@ def _build_clusters(canonical_articles: list[dict[str, Any]]) -> dict[str, Any]:
         article_ids = [article["article_id"] for article in members]
         sources = sorted({article.get("source") for article in members if article.get("source")})
         parsed_times = [parsed for parsed in (_parse_date(row.get("published_at")) for row in members) if parsed]
-        representative_tokens = sorted(cluster["token_centroid"])[:6]
+        representative_tokens = [token for token, _ in cluster["token_profile"].most_common(6)]
         cluster_key = " ".join(representative_tokens) or "misc"
         start = min(parsed_times).isoformat() if parsed_times else None
         end = max(parsed_times).isoformat() if parsed_times else None
@@ -786,16 +863,26 @@ def _build_citation_index(canonical_articles: list[dict[str, Any]], article_to_c
 def _extract_geospatial_entities(canonical_articles: list[dict[str, Any]]) -> dict[str, Any]:
     entities: list[dict[str, Any]] = []
     per_location: dict[str, dict[str, Any]] = {}
+    source_location_counts: defaultdict[str, int] = defaultdict(int)
 
     for article in sorted(canonical_articles, key=lambda row: row["article_id"]):
-        text = f"{article.get('title', '')} {article.get('snippet') or ''}".lower()
+        title_text = f"{article.get('title', '')}".lower()
+        snippet_text = f"{article.get('snippet') or ''}".lower()
+        combined_text = f"{title_text} {snippet_text}".strip()
         for location_key, location in GEO_LOCATION_LEXICON.items():
-            if re.search(rf"\b{re.escape(location_key)}\b", text):
+            if re.search(rf"\b{re.escape(location_key)}\b", combined_text):
+                if re.search(rf"\b{re.escape(location_key)}\b", title_text):
+                    location_type = "event_location"
+                elif re.search(rf"\b{re.escape(location_key)}\b", snippet_text):
+                    location_type = "mentioned_location"
+                else:
+                    location_type = "mentioned_location"
                 entity_id = _stable_id("geo", f"{article['article_id']}:{location_key}")
                 entity = {
                     "location_id": entity_id,
                     "article_id": article["article_id"],
                     "location_key": location_key,
+                    "location_type": location_type,
                     "city": location["city"],
                     "region_or_state": location["region_or_state"],
                     "country": location["country"],
@@ -803,12 +890,15 @@ def _extract_geospatial_entities(canonical_articles: list[dict[str, Any]]) -> di
                     "longitude": location["longitude"],
                     "confidence": 0.92,
                     "extraction_method": "explicit",
+                    "geocode_status": "extracted",
                     "ambiguity_flag": location_key == "paris",
                     "ambiguity_notes": "Could refer to multiple regions" if location_key == "paris" else None,
                     "evidence_text": location_key,
                     "evidence_linkage": {"article_id": article["article_id"]},
                 }
                 entities.append(entity)
+                if location_type != "event_location":
+                    continue
                 marker_key = f"{location['city']}|{location['country']}"
                 marker = per_location.setdefault(
                     marker_key,
@@ -829,6 +919,30 @@ def _extract_geospatial_entities(canonical_articles: list[dict[str, Any]]) -> di
                 marker["location_ids"].append(entity_id)
                 marker["confidences"].append(entity["confidence"])
                 marker["ambiguous_count"] += int(entity["ambiguity_flag"])
+
+        parsed_host = urlparse(str(article.get("url") or "")).netloc.lower()
+        if parsed_host:
+            source_location_counts[parsed_host] += 1
+            entities.append(
+                {
+                    "location_id": _stable_id("geo", f"{article['article_id']}:source:{parsed_host}"),
+                    "article_id": article["article_id"],
+                    "location_key": parsed_host,
+                    "location_type": "source_location",
+                    "city": None,
+                    "region_or_state": None,
+                    "country": None,
+                    "latitude": None,
+                    "longitude": None,
+                    "confidence": 0.5,
+                    "extraction_method": "source_domain",
+                    "geocode_status": "unresolved",
+                    "ambiguity_flag": False,
+                    "ambiguity_notes": "Publisher location unresolved without enrichment.",
+                    "evidence_text": parsed_host,
+                    "evidence_linkage": {"article_id": article["article_id"], "url": article.get("url")},
+                }
+            )
 
     markers = []
     for key in sorted(per_location.keys()):
@@ -855,6 +969,9 @@ def _extract_geospatial_entities(canonical_articles: list[dict[str, Any]]) -> di
     return {
         "entities": entities,
         "map_markers": markers,
+        "map_marker_location_type": "event_location",
+        "source_location_index": dict(source_location_counts),
+        "llm_geocode_hook": {"status": "not_implemented", "notes": "Reserved for future text-to-location enrichment."},
     }
 
 
@@ -948,6 +1065,16 @@ def _build_warnings(
     timeline: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     warnings: list[dict[str, Any]] = []
+    unknown_date_count = len([article for article in canonical_articles if article.get("date_status") == "unknown"])
+    if unknown_date_count:
+        warnings.append(
+            {
+                "warning_code": "unknown_date_articles",
+                "severity": "warn",
+                "message": "Some canonical articles could not be parsed into timeline dates.",
+                "metrics": {"unknown_date_count": unknown_date_count, "article_count": len(canonical_articles)},
+            }
+        )
     unique_sources = len({article.get("source") for article in canonical_articles if article.get("source")})
     if unique_sources < 2:
         warnings.append(
@@ -1126,6 +1253,19 @@ def _build_validation_report(
             "Proceed using successful sources with reduced confidence.",
         )
 
+    gdelt_run = next((run for run in ingestion.get("source_runs", []) if run.get("source_id") == "gdelt"), None)
+    if gdelt_run and gdelt_run.get("status") != "success":
+        add_event(
+            "FM-013-required-gdelt-source",
+            "fail",
+            "Required GDELT source did not complete successfully.",
+            {"gdelt_status": gdelt_run.get("status"), "gdelt_error": gdelt_run.get("error")},
+            "stop when gdelt status is not success",
+            "Critical trust gate: required source missing.",
+            "Inspect GDELT telemetry and retry after correcting request/parsing path.",
+            stop_run=True,
+        )
+
     retried_429_sources = [
         run.get("source_id")
         for run in ingestion.get("source_runs", [])
@@ -1207,6 +1347,7 @@ def _build_validation_report(
     if timeline:
         peak_count = max(point.get("article_count", 0) for point in timeline)
         total = sum(point.get("article_count", 0) for point in timeline)
+        peak_days = [point.get("day") for point in timeline if point.get("article_count", 0) == peak_count]
         peak_ratio = (peak_count / total) if total else 0.0
         if peak_ratio >= 0.7 and duplicate_ratio >= 0.35:
             add_event(
@@ -1217,6 +1358,17 @@ def _build_validation_report(
                 "warn if peak_ratio >= 0.70 and duplicate_ratio >= 0.35",
                 "Warning badge: spike reliability degraded.",
                 "Use peak drill-down and duplicate map before interpreting surge.",
+            )
+        if "unknown" in peak_days:
+            add_event(
+                "FM-014-unknown-date-peak",
+                "fail",
+                "Timeline peak is dominated by unknown publication dates.",
+                {"peak_days": peak_days, "peak_count": peak_count},
+                "stop when peak day resolves to unknown",
+                "Critical trust gate: timeline dating integrity failed.",
+                "Review date parsing and source fields before publishing.",
+                stop_run=True,
             )
 
     geo_entities = geospatial.get("entities", [])
@@ -1231,6 +1383,18 @@ def _build_validation_report(
             "warn when all extracted geospatial entities are weak",
             "Warning badge: low-confidence geospatial inference.",
             "Keep map visible but mark location conclusions as unverified.",
+        )
+    event_location_entities = [entity for entity in geo_entities if entity.get("location_type") == "event_location"]
+    if valid_count >= 5 and not event_location_entities:
+        add_event(
+            "FM-015-missing-event-geospatial",
+            "fail",
+            "Geospatial extraction did not produce event locations for mapping.",
+            {"valid_count": valid_count, "geo_entities": len(geo_entities)},
+            "stop when event_location coverage is empty for non-trivial runs",
+            "Critical trust gate: map semantics are not trustworthy.",
+            "Adjust extraction rules before relying on map outputs.",
+            stop_run=True,
         )
 
     clusters = clustering.get("clusters", [])
@@ -1332,7 +1496,7 @@ def _build_validation_report(
     }
 
 
-def ingest_articles(run_input: RunInput, max_records: int = 60) -> dict[str, Any]:
+def ingest_articles(run_input: RunInput, max_records: int | None = None) -> dict[str, Any]:
     requested_at = datetime.now(timezone.utc).isoformat()
     source_configs = _load_source_configs()
 
@@ -1454,11 +1618,15 @@ def normalize_articles(raw_hits: list[dict[str, Any]], source: str = "multi") ->
             )
             continue
 
+        parsed_published_at = _parse_date(hit.get("published_at"))
         normalized = {
             "article_id": hit.get("article_id") or f"{source}:{idx}",
             "title": hit.get("title"),
             "url": hit.get("url"),
             "published_at": hit.get("published_at"),
+            "published_at_parsed": parsed_published_at.isoformat() if parsed_published_at else None,
+            "published_day": parsed_published_at.date().isoformat() if parsed_published_at else "unknown",
+            "date_status": "parsed" if parsed_published_at else "unknown",
             "source": hit.get("source") or source,
             "source_label": hit.get("source_label"),
             "snippet": hit.get("snippet"),
@@ -1480,20 +1648,10 @@ def aggregate_daily_counts(canonical_articles: list[dict[str, Any]]) -> list[dic
     counts: Counter[str] = Counter()
 
     for article in canonical_articles:
-        published_at = article.get("published_at")
-        parsed = _parse_date(published_at)
-        if not parsed:
-            fallback = re.search(r"(\d{4}-\d{2}-\d{2})", str(published_at or ""))
-            if fallback:
-                day = fallback.group(1)
-            else:
-                compact = re.search(r"(\d{8})", str(published_at or ""))
-                if compact:
-                    day = f"{compact.group(1)[:4]}-{compact.group(1)[4:6]}-{compact.group(1)[6:8]}"
-                else:
-                    day = "unknown"
-        else:
-            day = parsed.date().isoformat()
+        day = article.get("published_day")
+        if not day:
+            parsed = _parse_date(article.get("published_at"))
+            day = parsed.date().isoformat() if parsed else "unknown"
         counts[day] += 1
 
     return [{"day": day, "article_count": counts[day]} for day in sorted(counts.keys())]
@@ -1506,6 +1664,9 @@ def run_workflow(run_input: RunInput) -> dict[str, Any]:
     ingestion = ingest_articles(run_input)
     normalization = normalize_articles(ingestion["raw_hits"], source="multi")
     timeline = aggregate_daily_counts(normalization["canonical_articles"])
+    known_timeline = [point for point in timeline if point["day"] != "unknown"]
+    unknown_timeline_count = sum(point["article_count"] for point in timeline if point["day"] == "unknown")
+    peak_day = max(timeline, key=lambda item: item["article_count"])["day"] if timeline else None
     clustering = _build_clusters(normalization["canonical_articles"])
     citation_index = _build_citation_index(
         normalization["canonical_articles"], clustering["article_to_cluster"]
@@ -1571,6 +1732,9 @@ def run_workflow(run_input: RunInput) -> dict[str, Any]:
             "aggregation": {
                 "daily_counts": timeline,
                 "total_days": len(timeline),
+                "active_days": len(known_timeline),
+                "unknown_date_count": unknown_timeline_count,
+                "peak_day": peak_day,
                 "geospatial": {"map_markers": geospatial["map_markers"]},
             },
         },
