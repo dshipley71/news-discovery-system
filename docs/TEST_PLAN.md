@@ -19,6 +19,7 @@ Validate that the in-repo Gradio + Colab workflow handles analyst-critical failu
 |---|---|---|
 | Duplicate article inflation | Existing + warning tests | WARN at elevated duplicates; STOP at severe ratio |
 | Source-specific failure | Existing ingestion failure tests | WARN partial failure; STOP if all fail |
+| Hacker News source adapter availability | `test_hacker_news_algolia_fetch` | Hacker News remains fetchable as supported lightweight discussion source |
 | Source status classification (failed/skipped/empty) | `test_source_failure_reporting_distinguishes_skipped_and_empty` | Distinct ingestion status lists remain inspectable |
 | Aggregation consistency | `test_aggregation_consistency_matches_normalized_total` | Timeline total equals normalized valid count |
 | Multi-day date bucketing | `test_parse_date_buckets_multi_day_for_gdelt_format` | GDELT/compact timestamps resolve to correct day buckets |
@@ -56,6 +57,7 @@ Accepted when:
 ## 8) Added regression coverage in this pass
 - Multi-day timeline integrity with explicit unknown-date bucket handling.
 - Reddit fallback behavior when primary JSON returns an empty payload.
+- Hacker News Algolia fetch behavior with deterministic attribution metadata.
 - GDELT adapter transparent failure telemetry vs successful parse path.
 - Validation stop gate for required GDELT failure.
 - Validation stop gate for unknown-date peak bucket.

@@ -33,6 +33,13 @@
       "endpoint": "https://api.gdeltproject.org/api/v2/doc/doc"
     },
     {
+      "id": "hacker_news",
+      "label": "Hacker News (Algolia)",
+      "type": "public_discussion_api",
+      "enabled": true,
+      "endpoint": "https://hn.algolia.com/api/v1/search_by_date"
+    },
+    {
       "id": "twitter",
       "label": "X/Twitter Search",
       "type": "optional_api",

@@ -32,6 +32,7 @@ A valid analyst session must verify all of the following:
   - Google News
   - Web via DuckDuckGo HTML
   - GDELT
+  - Hacker News (Algolia, lightweight public/discussion)
   - optional X/Twitter
 - Partial source failures and non-fatal warnings.
 - Normalization output counts and validation issues.

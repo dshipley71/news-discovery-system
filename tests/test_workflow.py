@@ -120,6 +120,53 @@ def test_twitter_disabled_when_token_missing(monkeypatch: pytest.MonkeyPatch) ->
     assert result.metadata == {"fetch_mode": "twitter_api_v2", "token_present": False}
 
 
+def test_hacker_news_algolia_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    class MockResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            return None
+
+    class MockSession:
+        def __init__(self):
+            self.params = None
+
+        def get(self, url, params=None, headers=None, timeout=20):
+            self.params = params
+            return MockResponse(
+                {
+                    "hits": [
+                        {
+                            "objectID": "hn-123",
+                            "title": "HN signal on energy grid",
+                            "url": "https://example.com/hn-story",
+                            "created_at": "2026-04-12T06:00:00Z",
+                            "author": "analyst_user",
+                        }
+                    ]
+                }
+            )
+
+    session = MockSession()
+    result = workflow.fetch_hacker_news(
+        session=session,
+        source={"id": "hacker_news", "label": "Hacker News (Algolia)", "endpoint": "https://hn.algolia.com/api/v1/search_by_date"},
+        run_input=RunInput(topic="energy grid", start_date=date(2026, 4, 1), end_date=date(2026, 4, 17)),
+        max_records=50,
+    )
+
+    assert result.status == "success"
+    assert len(result.articles) == 1
+    assert result.articles[0]["source"] == "hacker_news"
+    assert result.articles[0]["source_attribution"]["raw_source"] == "hacker_news_algolia"
+    assert "created_at_i>=" in session.params["numericFilters"]
+    assert result.metadata == {"fetch_mode": "hacker_news_algolia_search_by_date"}
+
+
 def test_schema_consistency_across_sources() -> None:
     records = [
         {

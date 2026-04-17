@@ -18,6 +18,7 @@ Inputs:
 Behavior:
 - Loads enabled source configs.
 - Dispatches source adapters from in-repo registry.
+- Includes lightweight public/discussion ingestion via Hacker News Algolia when enabled in source config.
 - Supports partial source failures.
 - Deduplicates records deterministically.
 - Emits canonical lineage duplicate map.

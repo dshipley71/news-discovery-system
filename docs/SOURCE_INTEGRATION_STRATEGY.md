@@ -38,7 +38,11 @@ This keeps source-specific behavior isolated without introducing an external orc
 4. **GDELT**
    - DOC 2.0 API (`mode=ArtList`, `format=json`)
    - No API key required
-5. **X/Twitter** (optional)
+5. **Hacker News (Algolia)**
+   - Public Algolia search API (`/api/v1/search_by_date`, `tags=story`)
+   - Lightweight public/discussion source for fast signal discovery
+   - No API key required
+6. **X/Twitter** (optional)
    - Enabled only when `TWITTER_BEARER_TOKEN` is present
    - Missing token => `skipped` source result and run continues
 

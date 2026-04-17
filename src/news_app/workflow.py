@@ -592,6 +592,65 @@ def fetch_gdelt(
     )
 
 
+def fetch_hacker_news(
+    session: requests.Session,
+    source: dict[str, Any],
+    run_input: RunInput,
+    max_records: int | None,
+) -> SourceResult:
+    source_id = source["id"]
+    source_label = source["label"]
+
+    resolved_max_records = _resolve_max_records(max_records, source, default=100)
+    start_epoch, end_epoch = _date_to_epoch_bounds(run_input.start_date, run_input.end_date)
+    payload = _safe_get_json(
+        session,
+        source["endpoint"],
+        params={
+            "query": run_input.topic,
+            "tags": "story",
+            "hitsPerPage": min(resolved_max_records, 1000),
+            "numericFilters": ",".join(
+                [
+                    f"created_at_i>={start_epoch}",
+                    f"created_at_i<={end_epoch}",
+                ]
+            ),
+        },
+    )
+
+    raw_items = []
+    for hit in payload.get("hits", []):
+        title = hit.get("title") or hit.get("story_title")
+        url = hit.get("url") or hit.get("story_url")
+        raw_items.append(
+            {
+                "title": title,
+                "url": url,
+                "published_at": hit.get("created_at"),
+                "external_id": hit.get("objectID"),
+                "author": hit.get("author"),
+                "snippet": hit.get("comment_text"),
+                "raw_source": "hacker_news_algolia",
+            }
+        )
+
+    canonical = [
+        _normalize_article(source_id, source_label, item)
+        for item in raw_items
+        if _in_date_window(item.get("published_at"), run_input)
+    ]
+
+    return SourceResult(
+        source_id=source_id,
+        source_label=source_label,
+        status="success",
+        articles=[item for item in canonical if item],
+        warnings=[],
+        metadata={"fetch_mode": "hacker_news_algolia_search_by_date"},
+    )
+
+
 def fetch_twitter(
     session: requests.Session,
     source: dict[str, Any],
@@ -660,6 +719,7 @@ SOURCE_ADAPTER_REGISTRY: dict[str, SourceFetcher] = {
     "google_news": fetch_google_news,
     "web_duckduckgo": fetch_web_duckduckgo,
     "gdelt": fetch_gdelt,
+    "hacker_news": fetch_hacker_news,
     "twitter": fetch_twitter,
 }
 
