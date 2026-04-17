@@ -643,8 +643,7 @@ def build_app() -> gr.Blocks:
     default_end = today
     default_start = today - timedelta(days=7)
 
-    # with gr.Blocks(title="News Discovery Analyst Dashboard", css=DARK_LIGHT_CSS) as demo:
-    with gr.Blocks(title="News Discovery Analyst Dashboard") as demo:
+    with gr.Blocks(title="News Discovery Analyst Dashboard", css=DARK_LIGHT_CSS) as demo:
         gr.Markdown(
             """
 # News Discovery Analyst Dashboard
@@ -856,15 +855,7 @@ Run once and review run summary, timeline, map, clusters, citations, and validat
 
 def main() -> None:
     demo = build_app()
-    # demo.launch(server_name="0.0.0.0", server_port=7860, share=True)
-    demo.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
-        share=True,
-        debug=True,
-        inline=False,
-        css=DARK_LIGHT_CSS,
-    )
+    demo.launch(server_name="0.0.0.0", server_port=7860, share=True, debug=True, inline=False)
 
 
 if __name__ == "__main__":
