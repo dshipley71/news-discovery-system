@@ -1,110 +1,111 @@
-# UI Specification: Analyst Dashboard (Gradio)
+# UI Specification: Analyst Review Dashboard (Gradio + Colab)
 
 ## Scope
-This document defines the current Gradio implementation surface for analyst execution. It reflects the existing workflow path (`ingestion -> normalization -> aggregation`) plus analyst-facing derived views (cluster/citation explorer and geospatial panel) generated only from real workflow outputs.
+This document defines the analyst-grade Gradio dashboard that consumes backend run artifacts directly from `run_workflow` (`stages.*` and `artifacts.*`) with no simulated core objects.
 
 ## 1) Dashboard Layout
 
-### 1.1 Top Control Panel
+### 1.1 Control Panel
 Required controls:
 - `topic`
 - `start_date (YYYY-MM-DD)`
 - `end_date (YYYY-MM-DD)`
-- `Run Workflow` button
+- `Run Workflow`
+- optional `Theme` selector (`Dark` default, optional `Light`)
 
-Notes:
-- Input validation is hard-fail for empty topic, invalid date format, reversed date range, date range over 30 days, and future end date.
-- Dark analyst theme is default.
+Behavior:
+- Dark theme is analyst-facing default.
+- Light/Dark can be switched in-session.
+- Input validation hard-fails for blank topic, invalid date format, reversed range, date range > 30 days, and future end date.
 
-### 1.2 Status / Run Summary Panel
-Shows:
-- workflow status text
+### 1.2 Run Summary and Warnings Panel
+Displays:
+- run status
 - run ID
-- run date range
-- article total
-- cluster total
-- location total
+- date range
+- source totals (succeeded / attempted / partial-failed)
+- article totals
+- cluster totals
+- geospatial totals
 - timeline trend summary
-- analyst warnings list for weak/partial outputs
+- analyst warnings and partial-failure warnings
+
+Warning sources:
+- `stages.warnings`
+- ingestion/normalization shortfalls
+- missing artifacts (timeline/map/clusters/citations)
 
 ### 1.3 Timeline Panel
 Contains:
-- daily article count plot
-- peak annotation(s)
+- daily article count plot from `stages.aggregation.daily_counts`
+- peak annotations when available
 - trend summary text
+- explicit drill-down table from `artifacts.evidence_bundles.peak_to_clusters_articles`
+- peak detail selector and JSON detail panel
 
-Behavior:
-- empty timeline state is explicitly rendered and called out in warnings.
+Drill-down path:
+- `peak day -> clusters -> article IDs`
 
-### 1.4 Geospatial Panel
+### 1.4 Geospatial Map Panel
 Contains:
-- marker-based global map (Plotly `scatter_geo`)
-- marker table for analyst validation
+- marker-based Plotly map from `stages.geospatial.map_markers` (or artifact equivalent)
+- marker table
+- location drill-down table and location detail selector
 
 Map semantics:
-- marker size: `article_count`
-- marker color/intensity: `low|medium|high`
-- uncertainty shown in hover and table
-- ambiguous location count shown in table
+- marker size = article volume
+- marker intensity/color = activity (`low|medium|high`)
+- confidence cue = `avg_confidence`
+- ambiguity cue = `ambiguous_count`
 
-Data behavior:
-- reads geospatial markers from workflow aggregation artifact when available
-- gracefully falls back to `No geospatial output returned` when absent
-- never fabricates location rows
+Drill-down path:
+- `location -> clusters -> article IDs`
 
-### 1.5 Cluster Explorer Panel
+### 1.5 Cluster Explorer
 Contains:
-- cluster summary table
-- cluster selector dropdown
-- cluster detail JSON
-- article membership table per selected cluster
+- cluster summary table from `artifacts.cluster_artifact`
+- cluster detail selector and JSON panel
+- article membership table
 
-Cluster metrics surfaced:
-- article count
-- distinct source count
-- duplicate count and ratio
+Indicators:
+- source diversity
 - top-source ratio
-- duplicate-heavy boolean flag
+- duplicate ratio / duplicate-heavy flag
 
-### 1.6 Citation / Evidence Panel
+### 1.6 Citation / Evidence Explorer
 Contains:
-- citation index JSON (counts by source + claim classification)
+- citation index JSON from `artifacts.citation_index`
 - citation records table
-- evidence bundle table (`cluster -> article -> citation`)
+- evidence bundle table derived from `artifacts.evidence_bundles`
 
-Claim classification handling:
-- uses upstream `claim_classification` when present
-- otherwise derives from available article metadata (`supported|inferred|speculative`) to keep output explicitly labeled
+Traceability:
+- every citation row links article and cluster IDs when available
+- evidence bundles expose `cluster_to_articles`, `peak_to_clusters_articles`, and `location_to_clusters_articles`
+- claim classification uses backend values (`supported|inferred|speculative`)
 
-### 1.7 Validation / Raw Output Panel
-Accordion keeps full stage outputs inspectable:
+### 1.7 Validation Panels
+Accordion provides inspectable payloads:
 - run metadata
-- ingestion output
-- normalization output
-- aggregation output
+- ingestion payload
+- normalization payload
+- aggregation payload
+- cluster payload
+- geospatial payload
+- warning payload
 
-## 2) Warning and Error Handling
-The dashboard must visibly warn for:
+## 2) Missing/Partial Artifact Handling
+Dashboard must not fail silently. Explicit warnings are rendered for:
 - empty ingestion
-- normalization invalid records
-- missing timeline data
-- missing geospatial output
-- missing cluster output
-- missing citation output
-- speculative citation volume
-- duplicate-heavy clusters
+- normalization validation loss
+- source-level partial failures
+- missing timeline artifact
+- missing geospatial artifact
+- missing cluster artifact
+- missing citation artifact
 
-Execution failures produce:
-- failed status message
-- run summary warning block
-- empty timeline/map visuals with explicit no-data message
+All panels preserve stable empty states; no fabricated markers/clusters/citations are produced.
 
-## 3) Colab and Browser Compatibility
-- App launch remains `demo.launch(..., share=True)`.
-- UI is fully executable from browser/Colab link without CLI interaction by analysts.
-- Layout uses core Gradio components supported in Colab notebooks.
-
-## 4) Traceability Requirements (Current UI)
-- Timeline, map, cluster, citation, and evidence panels must be generated from the same workflow run payload.
-- Analyst can validate every summarized panel against raw outputs in the validation accordion.
-- No simulated clusters/citations/geospatial markers are allowed.
+## 3) Colab Compatibility
+- Launch path remains `python gr_app.py` or notebook cell with `demo.launch(..., share=True)`.
+- UI remains fully browser/Colab usable without analyst CLI usage.
+- Components are standard Gradio blocks/tables/plots suitable for Colab shared links.

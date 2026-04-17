@@ -1,10 +1,9 @@
 # Artifact and Evidence Specification
 
 ## Purpose
-Define the first-class backend artifacts emitted by `run_workflow` in `src/news_app/workflow.py`.
+Define first-class backend artifacts emitted by `run_workflow` in `src/news_app/workflow.py` and consumed by the Gradio analyst dashboard.
 
 ## First-Class Backend Artifacts (Implemented)
-The backend now emits explicit artifact structures under both `stages.*` and top-level `artifacts.*`.
 
 1. **Deduplicated article set**
    - Path: `artifacts.deduplicated_article_set`
@@ -30,7 +29,7 @@ The backend now emits explicit artifact structures under both `stages.*` and top
      - `cluster_confidence`
      - `temporal_span.start`
      - `temporal_span.end`
-     - `heuristic` (currently `deterministic_lexical_token_cluster_v1`)
+     - `heuristic`
 
 4. **Citation index**
    - Path: `stages.citation_traceability` and `artifacts.citation_index`
@@ -51,7 +50,8 @@ The backend now emits explicit artifact structures under both `stages.*` and top
    - Paths:
      - `stages.geospatial.entities[]`
      - `stages.geospatial.map_markers[]`
-     - `stages.aggregation.geospatial.map_markers[]` (UI compatibility)
+     - `stages.aggregation.geospatial.map_markers[]`
+     - `artifacts.geospatial_entities_markers`
    - Includes explicit evidence linkage and confidence.
 
 7. **Analyst warnings**
@@ -64,13 +64,34 @@ The backend now emits explicit artifact structures under both `stages.*` and top
      - `sparse_coverage`
      - `speculative_interpretation_risk`
 
+## Dashboard Consumption Contract (Current)
+The Gradio dashboard reads artifacts directly with these mappings:
+
+- **Run summary totals/warnings**
+  - `stages.ingestion`, `stages.normalization`, `stages.warnings`
+- **Timeline panel**
+  - `stages.aggregation.daily_counts`
+  - `artifacts.evidence_bundles.peak_to_clusters_articles`
+- **Geospatial panel**
+  - `stages.geospatial.map_markers` or `artifacts.geospatial_entities_markers.map_markers`
+  - `artifacts.evidence_bundles.location_to_clusters_articles`
+- **Cluster explorer**
+  - `artifacts.cluster_artifact`
+  - `artifacts.deduplicated_article_set`
+  - `artifacts.canonical_lineage_duplicate_map`
+- **Citation/evidence explorer**
+  - `artifacts.citation_index`
+  - `artifacts.evidence_bundles`
+- **Validation panels**
+  - ingestion, normalization, aggregation, clustering, geospatial, warnings payloads from `stages.*`
+
 ## Determinism and Reproducibility
 - IDs are generated with deterministic SHA-1-based seeds.
 - Duplicate keys are deterministic URL/title/date keys.
-- Clustering is deterministic lexical-token grouping (explicitly heuristic).
-- Evidence bundle IDs are deterministic from their subject keys.
+- Clustering is deterministic lexical-token grouping.
+- Evidence bundle IDs are deterministic from subject keys.
 
 ## Deferred
-- Semantic/event embeddings-based clustering (not implemented in this phase).
-- External geocoder-backed disambiguation for broad location coverage.
-- Claim graph/report generation beyond citation/evidence contracts.
+- Embeddings/event-based clustering improvements.
+- External geocoder-backed disambiguation for broader location coverage.
+- Higher-order claim graph/report synthesis beyond current citation/evidence contracts.
