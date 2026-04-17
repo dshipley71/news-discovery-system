@@ -1,44 +1,61 @@
 # COLAB_RUNBOOK
 
 ## Purpose
-Run the Gradio analyst review dashboard in Google Colab with backend artifact-driven panels.
+This runbook defines the **production Colab path** for running and validating the in-repo Gradio analyst application end-to-end without requiring command-line usage for analysts.
 
-## Launch in Colab
-1. Open `notebooks/news_discovery_colab.ipynb`.
-2. Run setup/install cells.
-3. Confirm launch cell runs Gradio app with `share=True`.
-4. Open generated public Gradio URL.
+## Scope
+- Notebook: `notebooks/news_discovery_colab.ipynb`
+- UI: `gr_app.py` (launched with `share=True`)
+- Backend workflow: `src/news_app/workflow.py`
+- Source configuration: `config/sources.json`
 
-## Analyst Execution Flow (UI-Only)
-1. Set `Topic`, `Start date`, and `End date` in Control Panel.
-2. (Optional) keep default `Dark` theme or switch to `Light`.
-3. Click **Run Workflow**.
-4. Review **Run Summary & Warnings**:
-   - run id
-   - date range
-   - source totals
-   - article totals
-   - cluster totals
-   - geospatial totals
-   - analyst warnings / partial failures
+## Colab Launch Procedure
+1. Open `notebooks/news_discovery_colab.ipynb` in Google Colab.
+2. Run cells in order, top to bottom.
+3. In **Section 3** (repository load), either:
+   - run directly from an already-mounted repository copy, or
+   - set `NEWS_DISCOVERY_REPO_URL` and allow notebook-driven clone.
+4. In **Section 4**, optionally set `TWITTER_BEARER_TOKEN`.
+   - If not set, X/Twitter is skipped and warning behavior remains visible.
+5. In **Section 5**, launch Gradio; open the generated public URL.
 
-5. Review dashboard regions:
-   - **Timeline panel**: daily counts, trend summary, peak drill-down
-   - **Geospatial panel**: markers, confidence/ambiguity cues, location drill-down
-   - **Cluster explorer**: cluster summary, details, membership, diversity/duplicate indicators
-   - **Citation / Evidence explorer**: citation index, citation rows, bundle rows
-   - **Validation panels**: ingestion, normalization, aggregation, cluster, geospatial, warning payloads
+## Analyst Workflow (UI-Only)
+From the shared Gradio URL:
+1. Enter `Topic`, `Start date`, and `End date`.
+2. Click **Run Workflow**.
+3. Review summary and inspect all panels (timeline, geospatial, cluster, evidence/citation, validation payloads).
 
-## Colab Validation Checklist
-- Run summary numbers align with payload data.
-- Timeline drill-down links peak day to clusters/articles.
-- Map drill-down links location to clusters/articles.
-- Cluster membership references real article IDs.
-- Citation/evidence records are artifact-backed.
-- Warnings are explicit for missing or partial outputs.
+## Required Validation Coverage
+A valid analyst session must verify all of the following:
+- Per-source ingestion status for:
+  - Reddit
+  - Google News
+  - Web via DuckDuckGo HTML
+  - GDELT
+  - optional X/Twitter
+- Partial source failures and non-fatal warnings.
+- Normalization output counts and validation issues.
+- Duplicate handling telemetry and lineage map.
+- Clustering output (cluster counts and membership).
+- Geospatial output (entity/marker visibility and confidence cues).
+- Timeline correctness (day counts and ordering).
+- Citation/evidence availability.
+- Warning behavior visibility in both summary and payload views.
 
-## Known Colab Constraints
-- First run can be slower due to cold start.
-- External source availability/rate limiting may produce partial source failures.
-- Geospatial panel may legitimately remain empty when no location-bearing entities are extracted.
-- Browser rendering differences may affect map interactivity but should not affect payload traceability.
+## Notebook-Level Diagnostics (When UI Fails)
+Use Section 6 notebook diagnostics to run `run_workflow(...)` directly and inspect:
+- `stages.ingestion.source_runs`
+- `stages.normalization`
+- `stages.clustering`
+- `stages.geospatial`
+- `stages.aggregation.daily_counts`
+- `stages.citation_traceability`
+- `stages.warnings`
+
+This allows root-cause analysis even when a UI panel appears empty.
+
+## Known Limitations
+- External providers can rate-limit or intermittently fail.
+- First Colab run can be slower due to dependency cold start.
+- The shared Gradio URL is temporary; keep notebook runtime active during validation.
+- Geospatial results may be sparse for topics with weak location signals.
