@@ -863,7 +863,7 @@ def main() -> None:
         share=True,
         debug=True,
         inline=False,
-        css=DARK_CSS,
+        css=DARK_LIGHT_CSS,
     )
 
 
