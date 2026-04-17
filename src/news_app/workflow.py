@@ -82,6 +82,7 @@ class SourceResult:
     articles: list[dict[str, Any]]
     warnings: list[str]
     error: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 SourceFetcher = Callable[[requests.Session, dict[str, Any], RunInput, int], SourceResult]
@@ -153,13 +154,13 @@ def _request_with_429_retry(
     headers: dict[str, str] | None = None,
     timeout: int = 20,
     max_attempts: int = 3,
-) -> requests.Response:
+) -> tuple[requests.Response, dict[str, Any]]:
     wait_seconds = 1
     for attempt in range(1, max_attempts + 1):
         response = session.get(url, params=params, headers=headers, timeout=timeout)
         if response.status_code != 429:
             response.raise_for_status()
-            return response
+            return response, {"attempts": attempt, "retried_429": attempt > 1}
         if attempt == max_attempts:
             response.raise_for_status()
         retry_after = response.headers.get("Retry-After")
@@ -232,7 +233,13 @@ def fetch_reddit(
     json_params = {"q": run_input.topic, "sort": "new", "t": "all", "limit": max_records}
 
     try:
-        response = _request_with_429_retry(session, json_url, params=json_params, headers=headers)
+        response, retry_meta = _request_with_429_retry(
+            session,
+            json_url,
+            params=json_params,
+            headers=headers,
+            max_attempts=int(source.get("max_attempts", 3)),
+        )
         payload = response.json()
         children = payload.get("data", {}).get("children", [])
         raw_items = []
@@ -253,6 +260,7 @@ def fetch_reddit(
             )
     except Exception as exc:  # fallback path on transport/rate errors
         warnings.append(f"json_api_failed:{exc}")
+        retry_meta = {"attempts": 0, "retried_429": False}
         rss_response = session.get(
             source.get("rss_fallback"),
             params={"q": run_input.topic, "sort": "new"},
@@ -281,6 +289,12 @@ def fetch_reddit(
         status="success",
         articles=[item for item in canonical if item],
         warnings=warnings,
+        metadata={
+            "fetch_mode": "reddit_json_with_rss_fallback",
+            "json_retry_attempts": retry_meta["attempts"],
+            "json_retried_429": retry_meta["retried_429"],
+            "used_rss_fallback": any("json_api_failed" in warning for warning in warnings),
+        },
     )
 
 
@@ -318,6 +332,7 @@ def fetch_google_news(
         status="success",
         articles=[item for item in canonical if item],
         warnings=[],
+        metadata={"fetch_mode": "google_news_rss"},
     )
 
 
@@ -368,13 +383,20 @@ def fetch_web_duckduckgo(
         for item in extracted[:max_records]
         if _in_date_window(item.get("published_at"), run_input)
     ]
+    canonical_items = [item for item in canonical if item]
 
     return SourceResult(
         source_id=source_id,
         source_label=source_label,
         status="success",
-        articles=[item for item in canonical if item],
+        articles=canonical_items,
         warnings=warnings,
+        metadata={
+            "fetch_mode": "duckduckgo_html",
+            "pattern_used": canonical_items[0]["source_attribution"]["raw_source"]
+            if canonical_items
+            else None,
+        },
     )
 
 
@@ -425,6 +447,7 @@ def fetch_gdelt(
         status="success",
         articles=[item for item in canonical if item],
         warnings=[],
+        metadata={"fetch_mode": "gdelt_doc_2_json"},
     )
 
 
@@ -446,6 +469,7 @@ def fetch_twitter(
             articles=[],
             warnings=["missing_twitter_bearer_token"],
             error="TWITTER_BEARER_TOKEN not configured",
+            metadata={"fetch_mode": "twitter_api_v2", "token_present": False},
         )
 
     payload = _safe_get_json(
@@ -485,6 +509,7 @@ def fetch_twitter(
         status="success",
         articles=[item for item in canonical if item],
         warnings=[],
+        metadata={"fetch_mode": "twitter_api_v2", "token_present": True},
     )
 
 
@@ -547,6 +572,7 @@ def ingest_articles(run_input: RunInput, max_records: int = 60) -> dict[str, Any
                     "article_count": 0,
                     "warnings": ["missing_source_adapter"],
                     "error": f"No source adapter registered for {source_id}",
+                    "metadata": {"source_type": source.get("type")},
                 }
             )
             continue
@@ -569,6 +595,7 @@ def ingest_articles(run_input: RunInput, max_records: int = 60) -> dict[str, Any
                     "article_count": len(result.articles),
                     "warnings": result.warnings,
                     "error": result.error,
+                    "metadata": result.metadata or {},
                 }
             )
         except Exception as exc:
@@ -581,6 +608,7 @@ def ingest_articles(run_input: RunInput, max_records: int = 60) -> dict[str, Any
                     "article_count": 0,
                     "warnings": ["source_fetch_failed"],
                     "error": str(exc),
+                    "metadata": {},
                 }
             )
 
@@ -600,6 +628,7 @@ def ingest_articles(run_input: RunInput, max_records: int = 60) -> dict[str, Any
                 run["source_id"]: run["article_count"] for run in source_runs
             },
             "per_source_warnings": {run["source_id"]: run["warnings"] for run in source_runs},
+            "per_source_status": {run["source_id"]: run["status"] for run in source_runs},
             **dedupe_meta,
         },
     }

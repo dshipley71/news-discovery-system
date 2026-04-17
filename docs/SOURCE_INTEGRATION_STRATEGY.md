@@ -1,53 +1,49 @@
-# Source Integration Strategy (In-Repository)
+# Source Integration Strategy (In-Repository, Multi-Source)
 
 ## Purpose
-Define how the in-repository backend fetches, normalizes, and reports multi-source news ingestion for analyst runs.
+Define how the in-repo workflow ingests multiple real sources per run while preserving attribution, traceability, and analyst-visible telemetry.
 
-## Source Adapter Registry
-The backend uses a lightweight adapter registry in `src/news_app/workflow.py`:
-- `reddit`
-- `google_news`
-- `web_duckduckgo`
-- `gdelt`
-- `twitter` (optional)
+## Scope and assumptions
+- All workflow execution remains inside `src/news_app/workflow.py`.
+- Source enablement is driven by `config/sources.json`.
+- Optional token-gated sources (X/Twitter) must degrade gracefully when credentials are missing.
+- Ingestion should continue under partial source failure.
 
-Each adapter receives:
-- shared `requests.Session` (connection reuse),
-- source config object,
-- `RunInput` (topic/date window),
-- `max_records`.
+## Adapter + Registry Pattern
+The ingestion stage uses a lightweight registry:
+- `SOURCE_ADAPTER_REGISTRY: dict[source_id, fetcher]`
+- fetcher signature: `(session, source_config, run_input, max_records) -> SourceResult`
 
-Each adapter returns `SourceResult` with:
-- source ID/label,
-- status (`success`, `failed`, or `skipped`),
-- normalized article list,
-- warning list,
-- optional error text.
+`SourceResult` provides a uniform adapter output contract:
+- `source_id`, `source_label`
+- `status` (`success` | `failed` | `skipped`)
+- `articles` (already normalized)
+- `warnings`
+- `error` (optional)
+- `metadata` (source-level telemetry)
 
-## Required Source Behaviors
-### Reddit
-- Primary: JSON API (`/search.json`)
-- Fallback: RSS (`/search.rss`) when JSON path fails
-- Uses explicit user-agent header
-- Retries on HTTP 429 before fallback
+This keeps source-specific behavior isolated without introducing an external orchestrator or heavyweight plugin framework.
 
-### Google News
-- RSS ingestion via Google News search feed
+## Supported source behavior
+1. **Reddit**
+   - Primary path: JSON API (`/search.json`)
+   - Shared `requests.Session` + source user-agent
+   - 429-aware retry logic before fallback
+   - Fallback path: RSS (`/search.rss`) if JSON path fails
+2. **Google News**
+   - RSS search feed ingestion
+3. **Web (DuckDuckGo HTML)**
+   - HTML retrieval
+   - Regex extraction with 3 fallback patterns
+4. **GDELT**
+   - DOC 2.0 API (`mode=ArtList`, `format=json`)
+   - No API key required
+5. **X/Twitter** (optional)
+   - Enabled only when `TWITTER_BEARER_TOKEN` is present
+   - Missing token => `skipped` source result and run continues
 
-### Web (DuckDuckGo HTML)
-- HTML fetch and regex extraction
-- Three extraction patterns in fallback order
-
-### GDELT
-- DOC 2.0 JSON API (`mode=ArtList`, `format=json`)
-- No API key required
-
-### X/Twitter
-- Enabled only when `TWITTER_BEARER_TOKEN` is present
-- Missing token => source marked `skipped` with warning; run continues
-
-## Normalized Article Contract
-All adapters emit records normalized into one schema:
+## Canonical article schema
+Each adapter emits records aligned to a common schema:
 - `article_id`
 - `title`
 - `url`
@@ -56,32 +52,37 @@ All adapters emit records normalized into one schema:
 - `source_label`
 - `snippet` (optional)
 - `author` (optional)
-- `source_attribution` (`source_id`, `source_label`, `external_id`, `raw_source`)
+- `source_attribution`:
+  - `source_id`
+  - `source_label`
+  - `external_id` (optional)
+  - `raw_source` (optional)
 
-## Failure Tolerance and Telemetry
-Ingestion is partial-failure tolerant:
-- A single source failure does not fail entire ingestion.
-- Per run output includes:
-  - `sources_attempted`
-  - `sources_succeeded`
-  - `sources_failed`
-  - per-source `status`, `article_count`, `warnings`, and `error`
+## Ingestion telemetry contract
+Ingestion output exposes:
+- `sources_attempted`
+- `sources_succeeded`
+- `sources_failed`
+- `source_runs[]` with per-source:
+  - `status`
+  - `article_count`
+  - `warnings`
+  - `error`
+  - `metadata`
+- `telemetry` with:
+  - `per_source_article_counts`
+  - `per_source_warnings`
+  - `per_source_status`
+  - ingestion duplicate metrics
 
-## Early Duplicate Control
-Before downstream dedupe stages, ingestion applies key-based dedupe:
-- preferred key: canonical URL
-- fallback key: normalized title + publication date
+## Early duplicate control
+Before downstream normalization/analysis, ingestion applies lightweight duplicate suppression across sources:
+- primary key: normalized URL
+- fallback key: normalized title + publication day
 
-Telemetry tracks:
-- `ingestion_duplicate_count`
-- `ingestion_duplicate_ratio`
+This reduces cross-source duplicate inflation while preserving conservative, auditable behavior.
 
-## Assumptions
-- Source endpoints stay policy-accessible.
-- UI surfaces source telemetry from ingestion payload.
-- Optional token-based sources can be disabled by environment without config edits.
-
-## Known Limits
-- HTML extraction may miss items when page markup changes.
-- RSS feeds do not always include complete metadata.
-- Initial dedupe is conservative and URL/title based only.
+## Known limitations
+- HTML parsing can break when upstream markup changes.
+- Some RSS items have limited metadata.
+- Initial duplicate suppression is intentionally simple and may miss semantic duplicates.
