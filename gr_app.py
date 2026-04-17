@@ -495,6 +495,7 @@ def _build_run_summary(
     ingestion = stages.get("ingestion", {})
     normalization = stages.get("normalization", {})
     warnings = stages.get("warnings", [])
+    validation = stages.get("validation", {})
 
     source_runs = ingestion.get("source_runs", [])
     attempted_sources = len(ingestion.get("sources_attempted", []))
@@ -522,6 +523,10 @@ def _build_run_summary(
 
     for warning in warnings:
         warning_lines.append(f"[{warning.get('warning_code', 'warning')}] {warning.get('message', 'Analyst review required.')}")
+    if validation.get("stop_recommended"):
+        warning_lines.append(
+            f"[validation_stop] Publish blocked ({validation.get('fail_count', 0)} fail gate(s) triggered)."
+        )
 
     warning_text = "\n".join([f"- {line}" for line in warning_lines]) if warning_lines else "- No warnings."
     return (
@@ -531,6 +536,8 @@ def _build_run_summary(
         f"- **Date range:** `{result.get('input', {}).get('start_date')} → {result.get('input', {}).get('end_date')}`\n"
         f"- **Source totals:** `{succeeded_sources}/{attempted_sources}` succeeded, `{failed_sources}` partial/failed\n"
         f"- **Article totals:** `{normalization.get('valid_count', 0)}` valid, `{ingestion.get('hits_count', 0)}` ingested\n"
+        f"- **Validation gates:** `{validation.get('warn_count', 0)}` warn, `{validation.get('fail_count', 0)}` fail, "
+        f"`can_publish={validation.get('can_publish', True)}`\n"
         f"- **Cluster totals:** `{len(cluster_rows)}`\n"
         f"- **Geospatial totals:** `{len(map_rows)}` map markers\n"
         f"- **Timeline trend:** {timeline_summary}\n\n"
@@ -623,7 +630,7 @@ def run_ui_workflow(topic: str, start_date: str, end_date: str):
         _pretty_json(stages.get("aggregation", {})),
         _pretty_json(stages.get("clustering", {})),
         _pretty_json(stages.get("geospatial", {})),
-        _pretty_json(stages.get("warnings", [])),
+        _pretty_json({"warnings": stages.get("warnings", []), "validation": stages.get("validation", {})}),
         _pretty_json(cluster_views["cluster_lookup"]),
         _pretty_json(peak_lookup),
         _pretty_json(location_lookup),
