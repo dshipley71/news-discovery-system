@@ -22,7 +22,7 @@ This document defines analyst-facing failure handling for the in-repo workflow (
 
 ### FM-002 Source-specific failure
 - **Description:** One or more sources fail/skipped due to outage/auth/adapter error.
-- **How it appears here:** `source_runs` include per-source status, warnings, and error fields.
+- **How it appears here:** `source_runs` include per-source status (`success`/`skipped`/`failed`), warnings, and error fields; ingestion also reports `sources_skipped` and `sources_empty`.
 - **Detection rule:**
   - WARN if any source status is non-success.
   - STOP if all attempted sources are non-success.
@@ -30,6 +30,15 @@ This document defines analyst-facing failure handling for the in-repo workflow (
 - **Analyst-visible UI signal:** Run summary shows source success/failure counts and per-source states.
 - **Fallback behavior:** Use surviving sources and lower confidence.
 - **Stop condition:** Zero successful sources.
+
+### FM-012 Timeline-to-normalization mismatch
+- **Description:** Aggregation totals diverge from canonical article totals, causing misleading trend summaries.
+- **How it appears here:** `stages.aggregation.daily_counts` sum does not match `stages.normalization.valid_count`.
+- **Detection rule:** STOP when timeline total differs from canonical valid count.
+- **Prevention rule:** Robust date parsing and fallback day bucketing to avoid silent row drops.
+- **Analyst-visible UI signal:** Critical validation gate with measured `timeline_total` vs `valid_count`.
+- **Fallback behavior:** Keep run inspectable, but block publication until date normalization is corrected.
+- **Stop condition:** Any non-zero mismatch.
 
 ### FM-003 Rate limiting and backoff behavior
 - **Description:** Upstream 429s or throttling can reduce freshness and coverage.

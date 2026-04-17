@@ -37,6 +37,7 @@ Each `event` includes:
 | FM-009-weak-clusters | Weak clustering | warn | warn if weak cluster ratio >= 0.75 |
 | FM-010-citation-support | Missing/weak citations | warn/fail | fail if citation coverage incomplete; warn if weak citation share >= 0.40 |
 | FM-011-silent-ui-degradation | Missing artifact contract | fail | fail if any required artifact key is absent |
+| FM-012-timeline-normalization-mismatch | Aggregation inconsistency | fail | fail if timeline total article count != normalization valid_count |
 
 ## Warn vs Stop policy
 - **Warn:** analyst may continue inspection, but must see issue and remediation in UI.

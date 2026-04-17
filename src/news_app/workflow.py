@@ -118,6 +118,24 @@ GEO_LOCATION_LEXICON: dict[str, dict[str, Any]] = {
     "paris": {"city": "Paris", "region_or_state": "Ile-de-France", "country": "France", "latitude": 48.8566, "longitude": 2.3522},
     "tokyo": {"city": "Tokyo", "region_or_state": "Tokyo", "country": "Japan", "latitude": 35.6764, "longitude": 139.65},
     "washington": {"city": "Washington", "region_or_state": "District of Columbia", "country": "USA", "latitude": 38.9072, "longitude": -77.0369},
+    "los angeles": {"city": "Los Angeles", "region_or_state": "California", "country": "USA", "latitude": 34.0522, "longitude": -118.2437},
+    "san francisco": {"city": "San Francisco", "region_or_state": "California", "country": "USA", "latitude": 37.7749, "longitude": -122.4194},
+    "chicago": {"city": "Chicago", "region_or_state": "Illinois", "country": "USA", "latitude": 41.8781, "longitude": -87.6298},
+    "berlin": {"city": "Berlin", "region_or_state": "Berlin", "country": "Germany", "latitude": 52.52, "longitude": 13.405},
+    "rome": {"city": "Rome", "region_or_state": "Lazio", "country": "Italy", "latitude": 41.9028, "longitude": 12.4964},
+    "madrid": {"city": "Madrid", "region_or_state": "Community of Madrid", "country": "Spain", "latitude": 40.4168, "longitude": -3.7038},
+    "beijing": {"city": "Beijing", "region_or_state": "Beijing", "country": "China", "latitude": 39.9042, "longitude": 116.4074},
+    "shanghai": {"city": "Shanghai", "region_or_state": "Shanghai", "country": "China", "latitude": 31.2304, "longitude": 121.4737},
+    "moscow": {"city": "Moscow", "region_or_state": "Moscow", "country": "Russia", "latitude": 55.7558, "longitude": 37.6173},
+    "kyiv": {"city": "Kyiv", "region_or_state": "Kyiv", "country": "Ukraine", "latitude": 50.4501, "longitude": 30.5234},
+    "jerusalem": {"city": "Jerusalem", "region_or_state": "Jerusalem District", "country": "Israel", "latitude": 31.7683, "longitude": 35.2137},
+    "gaza": {"city": "Gaza", "region_or_state": "Gaza Strip", "country": "Palestine", "latitude": 31.5017, "longitude": 34.4668},
+    "delhi": {"city": "Delhi", "region_or_state": "Delhi", "country": "India", "latitude": 28.6139, "longitude": 77.209},
+    "mumbai": {"city": "Mumbai", "region_or_state": "Maharashtra", "country": "India", "latitude": 19.076, "longitude": 72.8777},
+    "sydney": {"city": "Sydney", "region_or_state": "New South Wales", "country": "Australia", "latitude": -33.8688, "longitude": 151.2093},
+    "toronto": {"city": "Toronto", "region_or_state": "Ontario", "country": "Canada", "latitude": 43.6532, "longitude": -79.3832},
+    "vancouver": {"city": "Vancouver", "region_or_state": "British Columbia", "country": "Canada", "latitude": 49.2827, "longitude": -123.1207},
+    "mexico city": {"city": "Mexico City", "region_or_state": "Mexico City", "country": "Mexico", "latitude": 19.4326, "longitude": -99.1332},
 }
 
 
@@ -165,6 +183,10 @@ def _parse_date(value: str | None) -> datetime | None:
     formats = [
         "%a, %d %b %Y %H:%M:%S %z",
         "%Y-%m-%d %H:%M:%S",
+        "%Y%m%d%H%M%S",
+        "%Y%m%dT%H%M%SZ",
+        "%Y%m%dT%H%M%S",
+        "%Y%m%d",
     ]
     for fmt in formats:
         try:
@@ -174,6 +196,16 @@ def _parse_date(value: str | None) -> datetime | None:
             return parsed.astimezone(timezone.utc)
         except ValueError:
             continue
+
+    digits = re.fullmatch(r"\d{10,13}", candidate)
+    if digits:
+        try:
+            epoch = int(candidate)
+            if len(candidate) == 13:
+                epoch = epoch // 1000
+            return datetime.fromtimestamp(epoch, tz=timezone.utc)
+        except (ValueError, OverflowError):
+            return None
 
     return None
 
@@ -636,24 +668,46 @@ def _tokenize(text: str) -> list[str]:
     return [token for token in tokens if token not in STOPWORDS and len(token) > 2]
 
 
-def _cluster_key(article: dict[str, Any]) -> str:
+def _article_cluster_tokens(article: dict[str, Any]) -> set[str]:
     combined = f"{article.get('title', '')} {article.get('snippet') or ''}".strip()
-    tokens = sorted(set(_tokenize(combined)))
-    return " ".join(tokens[:4]) or "misc"
+    return set(_tokenize(combined))
+
+
+def _token_overlap(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    intersection = len(left.intersection(right))
+    union = len(left.union(right))
+    return intersection / union if union else 0.0
 
 
 def _build_clusters(canonical_articles: list[dict[str, Any]]) -> dict[str, Any]:
-    cluster_groups: dict[str, list[dict[str, Any]]] = {}
-    for article in canonical_articles:
-        cluster_groups.setdefault(_cluster_key(article), []).append(article)
+    cluster_groups: list[dict[str, Any]] = []
+    for article in sorted(canonical_articles, key=lambda row: row["article_id"]):
+        tokens = _article_cluster_tokens(article)
+        best_cluster: dict[str, Any] | None = None
+        best_overlap = 0.0
+        for cluster in cluster_groups:
+            overlap = _token_overlap(tokens, cluster["token_centroid"])
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_cluster = cluster
+        intersection_size = len(tokens.intersection(best_cluster["token_centroid"])) if best_cluster else 0
+        if best_cluster and (best_overlap >= 0.34 or intersection_size >= 2):
+            best_cluster["members"].append(article)
+            best_cluster["token_centroid"].update(tokens)
+        else:
+            cluster_groups.append({"members": [article], "token_centroid": set(tokens)})
 
     clusters: list[dict[str, Any]] = []
     article_to_cluster: dict[str, str] = {}
-    for key in sorted(cluster_groups.keys()):
-        members = sorted(cluster_groups[key], key=lambda row: row["article_id"])
+    for cluster in cluster_groups:
+        members = sorted(cluster["members"], key=lambda row: row["article_id"])
         article_ids = [article["article_id"] for article in members]
         sources = sorted({article.get("source") for article in members if article.get("source")})
         parsed_times = [parsed for parsed in (_parse_date(row.get("published_at")) for row in members) if parsed]
+        representative_tokens = sorted(cluster["token_centroid"])[:6]
+        cluster_key = " ".join(representative_tokens) or "misc"
         start = min(parsed_times).isoformat() if parsed_times else None
         end = max(parsed_times).isoformat() if parsed_times else None
         source_diversity = len(sources)
@@ -664,11 +718,11 @@ def _build_clusters(canonical_articles: list[dict[str, Any]]) -> dict[str, Any]:
             ),
             3,
         )
-        cluster_id = _stable_id("cluster", key)
+        cluster_id = _stable_id("cluster", f"{cluster_key}:{'|'.join(article_ids)}")
         clusters.append(
             {
                 "cluster_id": cluster_id,
-                "cluster_label": f"Lexical cluster: {key}",
+                "cluster_label": f"Lexical cluster: {cluster_key}",
                 "article_ids": article_ids,
                 "source_diversity": source_diversity,
                 "cluster_confidence": confidence,
@@ -755,8 +809,9 @@ def _extract_geospatial_entities(canonical_articles: list[dict[str, Any]]) -> di
                     "evidence_linkage": {"article_id": article["article_id"]},
                 }
                 entities.append(entity)
+                marker_key = f"{location['city']}|{location['country']}"
                 marker = per_location.setdefault(
-                    location_key,
+                    marker_key,
                     {
                         "location_label": f"{location['city']}, {location['country']}",
                         "city": location["city"],
@@ -927,6 +982,15 @@ def _build_warnings(
                     },
                 }
             )
+    elif len(canonical_articles) >= 10:
+        warnings.append(
+            {
+                "warning_code": "limited_geospatial_coverage",
+                "severity": "warn",
+                "message": "Geospatial extraction coverage is low relative to article volume.",
+                "metrics": {"article_count": len(canonical_articles), "geospatial_entity_count": len(geospatial_entities)},
+            }
+        )
     weak_clusters = [cluster for cluster in clusters if len(cluster["article_ids"]) < 2 or cluster["cluster_confidence"] < 0.55]
     if weak_clusters:
         warnings.append(
@@ -1026,12 +1090,21 @@ def _build_validation_report(
 
     attempted = len(ingestion.get("sources_attempted", []))
     failed = len([run for run in ingestion.get("source_runs", []) if run.get("status") != "success"])
+    skipped = len([run for run in ingestion.get("source_runs", []) if run.get("status") == "skipped"])
+    empty_success = len(
+        [run for run in ingestion.get("source_runs", []) if run.get("status") == "success" and int(run.get("article_count", 0)) == 0]
+    )
     if attempted and failed == attempted:
         add_event(
             "FM-002-source-specific-failure",
             "fail",
             "All configured sources failed or were skipped.",
-            {"sources_attempted": attempted, "sources_non_success": failed},
+            {
+                "sources_attempted": attempted,
+                "sources_non_success": failed,
+                "sources_skipped": skipped,
+                "sources_empty_success": empty_success,
+            },
             "stop if all sources non-success; warn on partial failures",
             "Critical trust gate: no reliable source succeeded.",
             "Retry run or disable unstable sources until at least one succeeds.",
@@ -1042,7 +1115,12 @@ def _build_validation_report(
             "FM-002-source-specific-failure",
             "warn",
             "One or more sources failed; coverage may be biased.",
-            {"sources_attempted": attempted, "sources_non_success": failed},
+            {
+                "sources_attempted": attempted,
+                "sources_non_success": failed,
+                "sources_skipped": skipped,
+                "sources_empty_success": empty_success,
+            },
             "warn if any source fails",
             "Warning badge: partial source failure.",
             "Proceed using successful sources with reduced confidence.",
@@ -1099,6 +1177,19 @@ def _build_validation_report(
             "warn if invalid_ratio >= 0.20",
             "Warning badge: schema drift suspected.",
             "Proceed with canonical set while reviewing invalid records.",
+        )
+
+    timeline_total = sum(int(point.get("article_count", 0) or 0) for point in timeline)
+    if valid_count > 0 and timeline_total != valid_count:
+        add_event(
+            "FM-012-timeline-normalization-mismatch",
+            "fail",
+            "Timeline aggregation does not match canonical article volume.",
+            {"timeline_total": timeline_total, "valid_count": valid_count},
+            "stop when timeline_total != valid_count",
+            "Critical trust gate: timeline consistency broken.",
+            "Repair date normalization/bucketing before analyst interpretation.",
+            stop_run=True,
         )
 
     unique_sources = len({article.get("source") for article in normalization.get("canonical_articles", []) if article.get("source")})
@@ -1253,6 +1344,8 @@ def ingest_articles(run_input: RunInput, max_records: int = 60) -> dict[str, Any
     attempted: list[str] = []
     succeeded: list[str] = []
     failed: list[str] = []
+    skipped: list[str] = []
+    empty: list[str] = []
 
     for source in source_configs:
         source_id = source["id"]
@@ -1279,8 +1372,11 @@ def ingest_articles(run_input: RunInput, max_records: int = 60) -> dict[str, Any
             if result.status == "success":
                 all_articles.extend(result.articles)
                 succeeded.append(source_id)
+                if len(result.articles) == 0:
+                    empty.append(source_id)
             elif result.status == "skipped":
                 failed.append(source_id)
+                skipped.append(source_id)
             else:
                 failed.append(source_id)
 
@@ -1317,6 +1413,8 @@ def ingest_articles(run_input: RunInput, max_records: int = 60) -> dict[str, Any
         "sources_attempted": attempted,
         "sources_succeeded": succeeded,
         "sources_failed": failed,
+        "sources_skipped": skipped,
+        "sources_empty": empty,
         "source_runs": source_runs,
         "raw_hits": deduped_articles,
         "hits_count": len(deduped_articles),
@@ -1385,8 +1483,17 @@ def aggregate_daily_counts(canonical_articles: list[dict[str, Any]]) -> list[dic
         published_at = article.get("published_at")
         parsed = _parse_date(published_at)
         if not parsed:
-            continue
-        day = parsed.date().isoformat()
+            fallback = re.search(r"(\d{4}-\d{2}-\d{2})", str(published_at or ""))
+            if fallback:
+                day = fallback.group(1)
+            else:
+                compact = re.search(r"(\d{8})", str(published_at or ""))
+                if compact:
+                    day = f"{compact.group(1)[:4]}-{compact.group(1)[4:6]}-{compact.group(1)[6:8]}"
+                else:
+                    day = "unknown"
+        else:
+            day = parsed.date().isoformat()
         counts[day] += 1
 
     return [{"day": day, "article_count": counts[day]} for day in sorted(counts.keys())]
