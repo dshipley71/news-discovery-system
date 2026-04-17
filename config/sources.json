@@ -1,11 +1,41 @@
 {
   "sources": [
     {
-      "id": "hackernews_algolia",
-      "label": "Hacker News (Algolia API)",
+      "id": "reddit",
+      "label": "Reddit Search",
       "type": "public_api",
-      "endpoint": "https://hn.algolia.com/api/v1/search_by_date",
-      "tags": "story"
+      "enabled": true,
+      "endpoint": "https://www.reddit.com/search.json",
+      "rss_fallback": "https://www.reddit.com/search.rss",
+      "user_agent": "news-discovery-system/1.0"
+    },
+    {
+      "id": "google_news",
+      "label": "Google News RSS",
+      "type": "rss",
+      "enabled": true,
+      "endpoint": "https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+    },
+    {
+      "id": "web_duckduckgo",
+      "label": "Web Search (DuckDuckGo HTML)",
+      "type": "web_html",
+      "enabled": true,
+      "endpoint": "https://html.duckduckgo.com/html/"
+    },
+    {
+      "id": "gdelt",
+      "label": "GDELT DOC 2.0",
+      "type": "public_api",
+      "enabled": true,
+      "endpoint": "https://api.gdeltproject.org/api/v2/doc/doc"
+    },
+    {
+      "id": "twitter",
+      "label": "X/Twitter Search",
+      "type": "optional_api",
+      "enabled": true,
+      "endpoint": "https://api.twitter.com/2/tweets/search/recent"
     }
   ]
 }
