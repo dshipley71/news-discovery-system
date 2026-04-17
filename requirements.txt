@@ -1,1 +1,5 @@
+gradio
+matplotlib
+plotly
+requests
 pytest==9.0.2

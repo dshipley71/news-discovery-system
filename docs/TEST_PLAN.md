@@ -1,119 +1,121 @@
-# UI-Executable Test Plan (Analyst Review Dashboard)
+# UI-Executable Test Plan (Colab + Gradio Analyst Validation)
 
 ## 1) Purpose
-Validate that the Gradio dashboard is operational, artifact-driven, warning-visible, and analyst-usable in browser and Colab.
+Validate that the in-repo Gradio analyst application is executable from Google Colab, preserves evidence traceability, and exposes inspectable outputs across all workflow stages.
 
 ## 2) Test Environment
-- Launch with `python gr_app.py` (local) or Colab launch cell with `share=True`.
-- Use backend workflow outputs only (`stages.*`, `artifacts.*`).
-- Do not inject mock UI data.
+- Primary execution path: `notebooks/news_discovery_colab.ipynb`.
+- UI launch: `gr_app.py` with `share=True`.
+- Workflow backend: `src/news_app/workflow.py` (real execution, no mock payload injection).
+- Source configuration: `config/sources.json`.
 
-## 3) Acceptance Tests by Dashboard Region
+## 3) Acceptance Tests by Analyst Objective
 
-### AT-1 Control Panel + Theme
-1. Open dashboard.
-2. Confirm Theme defaults to `Dark`.
-3. Switch Theme to `Light`, then back to `Dark`.
-4. Enter topic + date range and run.
-
-Expected:
-- Dark is default analyst theme.
-- Theme switching does not break panel layout.
-- Run action remains functional after theme change.
-
-### AT-2 Run Summary and Warnings
-1. Execute normal run.
-2. Confirm run summary includes run ID, date range, source totals, article totals, cluster totals, geospatial totals.
-3. Confirm warnings section appears (even if only "No warnings").
+### AT-1 Launch Reliability (Colab)
+1. Run notebook Sections 1-5 in sequence.
+2. Confirm Gradio process stays alive.
+3. Confirm a public Gradio URL is generated.
 
 Expected:
-- Summary values align with payload counts.
-- Partial failures are listed when any source is skipped/failed.
-- No silent omission of warnings.
+- Analyst can access UI from browser without local CLI use.
+- Launch path is reproducible on fresh Colab runtime.
 
-### AT-3 Timeline Panel + Drill-down
-1. Run with data-bearing topic/date.
-2. Confirm timeline chart renders daily counts.
-3. Confirm peak drill-down table is populated when peaks exist.
-4. Select peak day in dropdown and inspect detail JSON.
-
-Expected:
-- Peak detail maps `peak_day -> clusters -> article_ids`.
-- Empty timeline shows explicit no-data message.
-
-### AT-4 Geospatial Panel + Drill-down
-1. Run with location-bearing topic/date.
-2. Confirm map markers render.
-3. Verify marker table shows confidence and ambiguity cues.
-4. Select a location in dropdown and inspect detail JSON.
+### AT-2 Per-Source Ingestion Visibility
+1. Run workflow for a current-events topic and recent date range.
+2. Inspect ingestion validation output.
+3. Confirm each configured source has status + article count:
+   - reddit
+   - google_news
+   - web_duckduckgo
+   - gdelt
+   - twitter (optional)
 
 Expected:
-- Location detail maps `location -> clusters -> article_ids`.
-- If no geospatial artifact exists, panel shows explicit no-data state and warning.
+- All sources appear in ingestion output, including failed/skipped states.
+- Source-level warnings are visible and inspectable.
 
-### AT-5 Cluster Explorer
-1. Confirm cluster summary table populates.
-2. Select cluster and inspect detail panel + membership table.
-3. Verify source diversity, top-source ratio, and duplicate-heavy indicators are present.
-
-Expected:
-- Membership rows use real article IDs from normalization payload.
-- Duplicate-heavy indicator is visible where applicable.
-
-### AT-6 Citation / Evidence Explorer
-1. Confirm citation index JSON and citation records table populate.
-2. Confirm evidence bundle table includes cluster/peak/location-derived bundles.
-3. Compare citation row count vs `citation_index.citation_count`.
+### AT-3 Partial Source Failure Handling
+1. Run without `TWITTER_BEARER_TOKEN`.
+2. Re-run workflow.
 
 Expected:
-- Citation and evidence rows are backend-artifact-derived.
-- Claim classification is visible when provided.
+- X/Twitter is marked as skipped/failed with explicit warning.
+- Overall run still completes; no fatal pipeline stop.
 
-### AT-7 Validation Panels
-For each run, inspect:
-- ingestion payload
-- normalization payload
-- aggregation payload
-- cluster payload
-- geospatial payload
-- warning payload
+### AT-4 Normalization + Duplicate Handling
+1. Inspect normalization panel/payload.
+2. Confirm `valid_count`, `invalid_count`, and canonical article list are visible.
+3. Inspect ingestion telemetry for duplicate ratio and duplicate map.
 
 Expected:
-- All payload panels are visible and inspectable.
-- Missing payloads are visible as empty JSON, not hidden.
+- Normalization output is artifact-backed and inspectable.
+- Duplicate handling metrics are present and explainable.
 
-### AT-8 Input Validation Hard Fail
-Run invalid input cases:
-- blank topic
-- invalid date format
-- start date > end date
-- date range > 30 days
-- future end date
+### AT-5 Clustering Output
+1. Inspect cluster summary + detail panels.
+2. Validate cluster counts and article membership.
 
 Expected:
-- status clearly reports failure reason
-- run summary failure block appears
-- UI remains interactive for retry
+- Cluster records include IDs, labels, and article IDs.
+- Cluster output is consistent with canonical article set.
 
-## 4) Weak/Partial Output Verification
-Execute at least one sparse/weak run and verify:
-- warning panel includes weakness/coverage warnings
-- missing artifacts generate explicit warning entries
-- empty tables/plots show explicit no-data state
-
-## 5) Colab Compatibility Test
-1. Open `notebooks/news_discovery_colab.ipynb`.
-2. Launch Gradio with `share=True`.
-3. Execute AT-2 through AT-7 from shared URL.
+### AT-6 Geospatial Output
+1. Inspect map and geospatial payload.
+2. Validate marker/entity counts and confidence/ambiguity metadata.
 
 Expected:
-- same panel structure as local run
-- workflow fully executable in notebook-hosted UI
+- Geospatial output is present when location-bearing entities exist.
+- No-data geospatial state is explicit when absent.
 
-## 6) Evidence Capture for QA
-Capture per run:
+### AT-7 Timeline Correctness
+1. Inspect timeline panel and aggregation payload.
+2. Confirm daily counts are date-ordered and plausible.
+
+Expected:
+- Timeline ordering is correct.
+- Peak day inspection aligns with article-level evidence.
+
+### AT-8 Citation / Evidence Availability
+1. Inspect citation index and evidence bundle views.
+2. Compare citation count with available citation rows.
+
+Expected:
+- Citation/evidence records are present when canonical articles exist.
+- Traceability fields (article ID, URL/source metadata, claim classification where available) are inspectable.
+
+### AT-9 Warning Behavior
+1. Inspect run summary warning block.
+2. Inspect warnings payload in validation panel.
+
+Expected:
+- Warnings are explicit (not silent).
+- Warning details include code/category/message/metrics where provided.
+
+## 4) Notebook Diagnostic Procedure
+If UI panels look empty or inconsistent:
+1. Run notebook Section 6 smoke-test cells.
+2. Compare backend stage payloads directly:
+   - ingestion
+   - normalization
+   - clustering
+   - geospatial
+   - aggregation
+   - citation_traceability
+   - warnings
+3. Capture mismatch details (run ID, stage key, observed vs expected).
+
+## 5) Evidence Capture Requirements
+For each analyst validation run, capture:
 - run ID
 - topic and date range
-- warning messages observed
-- pass/fail by acceptance test
-- screenshots of summary, timeline, map, cluster, and citation panels
+- source-level statuses
+- warning messages
+- pass/fail per acceptance test
+- screenshots of summary, timeline, map, cluster, and citation/evidence panels
+
+## 6) Exit Criteria
+Testing is accepted when:
+- Colab launch works without hidden manual steps.
+- Gradio UI is accessible via share URL.
+- All major outputs are inspectable from UI and/or diagnostics.
+- Optional Twitter token path degrades gracefully with explicit warnings.
