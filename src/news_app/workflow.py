@@ -963,6 +963,284 @@ def _build_warnings(
     return warnings
 
 
+def _build_validation_report(
+    *,
+    ingestion: dict[str, Any],
+    normalization: dict[str, Any],
+    clustering: dict[str, Any],
+    geospatial: dict[str, Any],
+    citation_index: dict[str, Any],
+    evidence_bundles: dict[str, Any],
+    timeline: list[dict[str, Any]],
+    warnings: list[dict[str, Any]],
+    artifacts: dict[str, Any],
+) -> dict[str, Any]:
+    events: list[dict[str, Any]] = []
+
+    def add_event(
+        rule_id: str,
+        status: str,
+        message: str,
+        measured: dict[str, Any],
+        threshold: str,
+        analyst_signal: str,
+        fallback: str,
+        stop_run: bool = False,
+    ) -> None:
+        events.append(
+            {
+                "rule_id": rule_id,
+                "status": status,
+                "message": message,
+                "measured": measured,
+                "threshold": threshold,
+                "analyst_visible_signal": analyst_signal,
+                "fallback": fallback,
+                "stop_run": stop_run,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+    duplicate_ratio = float(ingestion.get("telemetry", {}).get("ingestion_duplicate_ratio", 0.0) or 0.0)
+    if duplicate_ratio >= 0.6:
+        add_event(
+            "FM-001-duplicate-inflation",
+            "fail",
+            "Duplicate ratio is severe and can materially distort analyst conclusions.",
+            {"duplicate_ratio": round(duplicate_ratio, 3)},
+            "stop if duplicate_ratio >= 0.60; warn if >= 0.35",
+            "Critical trust gate: duplicate inflation exceeded stop threshold.",
+            "Narrow query/date range and inspect duplicate lineage before rerun.",
+            stop_run=True,
+        )
+    elif duplicate_ratio >= 0.35:
+        add_event(
+            "FM-001-duplicate-inflation",
+            "warn",
+            "Duplicate ratio is elevated and may inflate clusters/timeline.",
+            {"duplicate_ratio": round(duplicate_ratio, 3)},
+            "warn if duplicate_ratio >= 0.35",
+            "Warning badge: duplicate-heavy result set.",
+            "Continue with deduplicated set and review duplicate lineage map.",
+        )
+
+    attempted = len(ingestion.get("sources_attempted", []))
+    failed = len([run for run in ingestion.get("source_runs", []) if run.get("status") != "success"])
+    if attempted and failed == attempted:
+        add_event(
+            "FM-002-source-specific-failure",
+            "fail",
+            "All configured sources failed or were skipped.",
+            {"sources_attempted": attempted, "sources_non_success": failed},
+            "stop if all sources non-success; warn on partial failures",
+            "Critical trust gate: no reliable source succeeded.",
+            "Retry run or disable unstable sources until at least one succeeds.",
+            stop_run=True,
+        )
+    elif failed > 0:
+        add_event(
+            "FM-002-source-specific-failure",
+            "warn",
+            "One or more sources failed; coverage may be biased.",
+            {"sources_attempted": attempted, "sources_non_success": failed},
+            "warn if any source fails",
+            "Warning badge: partial source failure.",
+            "Proceed using successful sources with reduced confidence.",
+        )
+
+    retried_429_sources = [
+        run.get("source_id")
+        for run in ingestion.get("source_runs", [])
+        if run.get("metadata", {}).get("json_retried_429")
+    ]
+    if retried_429_sources:
+        add_event(
+            "FM-003-rate-limit-backoff",
+            "warn",
+            "Rate limiting encountered; backoff/retry path was used.",
+            {"retried_429_sources": retried_429_sources},
+            "warn when any source reports 429 retry activity",
+            "Warning badge: rate limiting encountered.",
+            "Keep run but monitor source freshness and retry counts.",
+        )
+
+    valid_count = int(normalization.get("valid_count", 0) or 0)
+    if valid_count == 0:
+        add_event(
+            "FM-004-empty-ingestion",
+            "fail",
+            "No canonical articles remain after ingestion/normalization.",
+            {"valid_count": valid_count},
+            "stop when valid_count == 0",
+            "Critical trust gate: run blocked due to empty evidence set.",
+            "Expand date range or topic query, then rerun.",
+            stop_run=True,
+        )
+
+    invalid_count = int(normalization.get("invalid_count", 0) or 0)
+    invalid_ratio = (invalid_count / (valid_count + invalid_count)) if (valid_count + invalid_count) else 0.0
+    if invalid_ratio >= 0.5 and (valid_count + invalid_count) > 0:
+        add_event(
+            "FM-005-schema-drift",
+            "fail",
+            "Schema drift is severe; too many records failed normalization.",
+            {"invalid_ratio": round(invalid_ratio, 3), "invalid_count": invalid_count},
+            "stop if invalid_ratio >= 0.50; warn if >= 0.20",
+            "Critical trust gate: schema inconsistency exceeded safe limit.",
+            "Inspect source adapters and normalization mapping before rerun.",
+            stop_run=True,
+        )
+    elif invalid_ratio >= 0.2:
+        add_event(
+            "FM-005-schema-drift",
+            "warn",
+            "Normalization rejected a meaningful share of ingested records.",
+            {"invalid_ratio": round(invalid_ratio, 3), "invalid_count": invalid_count},
+            "warn if invalid_ratio >= 0.20",
+            "Warning badge: schema drift suspected.",
+            "Proceed with canonical set while reviewing invalid records.",
+        )
+
+    unique_sources = len({article.get("source") for article in normalization.get("canonical_articles", []) if article.get("source")})
+    if unique_sources <= 1 and valid_count >= 5:
+        add_event(
+            "FM-006-weak-source-diversity",
+            "warn",
+            "Coverage is dominated by a single source family.",
+            {"unique_sources": unique_sources},
+            "warn if unique_sources <= 1",
+            "Warning badge: weak source diversity.",
+            "Treat findings as provisional until corroborated.",
+        )
+
+    if timeline:
+        peak_count = max(point.get("article_count", 0) for point in timeline)
+        total = sum(point.get("article_count", 0) for point in timeline)
+        peak_ratio = (peak_count / total) if total else 0.0
+        if peak_ratio >= 0.7 and duplicate_ratio >= 0.35:
+            add_event(
+                "FM-007-misleading-timeline-spikes",
+                "warn",
+                "Timeline spike may be driven by duplicates or ingestion batching.",
+                {"peak_ratio": round(peak_ratio, 3), "duplicate_ratio": round(duplicate_ratio, 3)},
+                "warn if peak_ratio >= 0.70 and duplicate_ratio >= 0.35",
+                "Warning badge: spike reliability degraded.",
+                "Use peak drill-down and duplicate map before interpreting surge.",
+            )
+
+    geo_entities = geospatial.get("entities", [])
+    ambiguous_geo = [entity for entity in geo_entities if entity.get("ambiguity_flag")]
+    low_geo = [entity for entity in geo_entities if float(entity.get("confidence", 0.0) or 0.0) < 0.7]
+    if geo_entities and (len(ambiguous_geo) + len(low_geo)) == len(geo_entities):
+        add_event(
+            "FM-008-low-confidence-geospatial",
+            "warn",
+            "All geospatial matches are ambiguous and/or low confidence.",
+            {"geo_entities": len(geo_entities), "ambiguous_geo": len(ambiguous_geo), "low_conf_geo": len(low_geo)},
+            "warn when all extracted geospatial entities are weak",
+            "Warning badge: low-confidence geospatial inference.",
+            "Keep map visible but mark location conclusions as unverified.",
+        )
+
+    clusters = clustering.get("clusters", [])
+    weak_clusters = [
+        cluster
+        for cluster in clusters
+        if len(cluster.get("article_ids", [])) < 2 or float(cluster.get("cluster_confidence", 0.0) or 0.0) < 0.55
+    ]
+    weak_cluster_ratio = (len(weak_clusters) / len(clusters)) if clusters else 0.0
+    if clusters and weak_cluster_ratio >= 0.75:
+        add_event(
+            "FM-009-weak-clusters",
+            "warn",
+            "Most clusters are low-evidence or single-article clusters.",
+            {"weak_cluster_ratio": round(weak_cluster_ratio, 3), "weak_cluster_count": len(weak_clusters)},
+            "warn if weak_cluster_ratio >= 0.75",
+            "Warning badge: weak clustering reliability.",
+            "Use article-level evidence over cluster-level interpretation.",
+        )
+
+    citation_count = int(citation_index.get("citation_count", 0) or 0)
+    citation_rows = citation_index.get("citations", [])
+    if valid_count > 0 and citation_count < valid_count:
+        add_event(
+            "FM-010-citation-support",
+            "fail",
+            "Citation coverage is incomplete for canonical articles.",
+            {"citation_count": citation_count, "canonical_articles": valid_count},
+            "stop when citation_count < canonical_articles",
+            "Critical trust gate: publish blocked until citations are complete.",
+            "Regenerate citation index before reporting.",
+            stop_run=True,
+        )
+    elif citation_count > 0:
+        weak_citations = [
+            citation
+            for citation in citation_rows
+            if citation.get("claim_classification") in {"inferred", "speculative"}
+        ]
+        weak_ratio = len(weak_citations) / citation_count
+        if weak_ratio >= 0.4:
+            add_event(
+                "FM-010-citation-support",
+                "warn",
+                "Large share of citations are inferred/speculative.",
+                {"weak_citation_ratio": round(weak_ratio, 3), "citation_count": citation_count},
+                "warn if inferred+speculative share >= 0.40",
+                "Warning badge: weak citation support.",
+                "Require analyst review of underlying article links.",
+            )
+
+    missing_artifacts = [
+        artifact_key
+        for artifact_key in [
+            "deduplicated_article_set",
+            "canonical_lineage_duplicate_map",
+            "cluster_artifact",
+            "citation_index",
+            "evidence_bundles",
+            "geospatial_entities_markers",
+            "analyst_warnings",
+        ]
+        if artifact_key not in artifacts
+    ]
+    if missing_artifacts:
+        add_event(
+            "FM-011-silent-ui-degradation",
+            "fail",
+            "Required artifacts are missing; UI could degrade silently.",
+            {"missing_artifacts": missing_artifacts},
+            "stop when any required artifact is missing",
+            "Critical trust gate: artifact contract violation.",
+            "Block analyst interpretation until artifacts are restored.",
+            stop_run=True,
+        )
+
+    warned_codes = {warning.get("warning_code") for warning in warnings}
+    for event in events:
+        if event["status"] == "warn":
+            warning_code = f"validation_gate:{event['rule_id']}"
+            if warning_code not in warned_codes:
+                warnings.append(
+                    {
+                        "warning_code": warning_code,
+                        "severity": "warn",
+                        "message": event["message"],
+                        "metrics": event["measured"],
+                    }
+                )
+
+    fail_count = len([event for event in events if event["status"] == "fail"])
+    warn_count = len([event for event in events if event["status"] == "warn"])
+    return {
+        "events": events,
+        "warn_count": warn_count,
+        "fail_count": fail_count,
+        "stop_recommended": fail_count > 0,
+        "can_publish": fail_count == 0,
+    }
+
+
 def ingest_articles(run_input: RunInput, max_records: int = 60) -> dict[str, Any]:
     requested_at = datetime.now(timezone.utc).isoformat()
     source_configs = _load_source_configs()
@@ -1141,6 +1419,26 @@ def run_workflow(run_input: RunInput) -> dict[str, Any]:
         citation_index=citation_index,
         timeline=timeline,
     )
+    artifacts = {
+        "deduplicated_article_set": normalization["canonical_articles"],
+        "canonical_lineage_duplicate_map": ingestion["telemetry"].get("duplicate_map", []),
+        "cluster_artifact": clustering["clusters"],
+        "citation_index": citation_index,
+        "evidence_bundles": evidence_bundles,
+        "geospatial_entities_markers": geospatial,
+        "analyst_warnings": warnings,
+    }
+    validation = _build_validation_report(
+        ingestion=ingestion,
+        normalization=normalization,
+        clustering=clustering,
+        geospatial=geospatial,
+        citation_index=citation_index,
+        evidence_bundles=evidence_bundles,
+        timeline=timeline,
+        warnings=warnings,
+        artifacts=artifacts,
+    )
 
     return {
         "run_id": run_id,
@@ -1162,19 +1460,12 @@ def run_workflow(run_input: RunInput) -> dict[str, Any]:
             "evidence": evidence_bundles,
             "geospatial": geospatial,
             "warnings": warnings,
+            "validation": validation,
             "aggregation": {
                 "daily_counts": timeline,
                 "total_days": len(timeline),
                 "geospatial": {"map_markers": geospatial["map_markers"]},
             },
         },
-        "artifacts": {
-            "deduplicated_article_set": normalization["canonical_articles"],
-            "canonical_lineage_duplicate_map": ingestion["telemetry"].get("duplicate_map", []),
-            "cluster_artifact": clustering["clusters"],
-            "citation_index": citation_index,
-            "evidence_bundles": evidence_bundles,
-            "geospatial_entities_markers": geospatial,
-            "analyst_warnings": warnings,
-        },
+        "artifacts": artifacts,
     }

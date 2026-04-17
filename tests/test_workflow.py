@@ -383,3 +383,74 @@ def test_warning_generation_on_weak_inputs(monkeypatch: pytest.MonkeyPatch) -> N
     assert "weak_cluster_evidence" in warning_codes
     assert "sparse_coverage" in warning_codes
     assert "low_confidence_geo" in warning_codes
+
+
+def test_validation_stop_on_empty_ingestion(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_input = RunInput(topic="no data", start_date=date(2026, 4, 1), end_date=date(2026, 4, 17))
+
+    monkeypatch.setattr(workflow, "ingest_articles", lambda _: {
+        "raw_hits": [],
+        "hits_count": 0,
+        "source_runs": [{"source_id": "reddit", "status": "success", "metadata": {}, "warnings": []}],
+        "sources_attempted": ["reddit"],
+        "sources_succeeded": ["reddit"],
+        "sources_failed": [],
+        "telemetry": {"ingestion_duplicate_ratio": 0.0, "duplicate_map": []},
+    })
+
+    result = run_workflow(run_input)
+    validation = result["stages"]["validation"]
+    failed_rule_ids = {event["rule_id"] for event in validation["events"] if event["status"] == "fail"}
+
+    assert validation["stop_recommended"] is True
+    assert validation["can_publish"] is False
+    assert "FM-004-empty-ingestion" in failed_rule_ids
+
+
+def test_validation_warns_on_rate_limit_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_input = RunInput(topic="rate limit", start_date=date(2026, 4, 1), end_date=date(2026, 4, 17))
+
+    monkeypatch.setattr(workflow, "ingest_articles", lambda _: {
+        "raw_hits": [
+            {
+                "article_id": "a1",
+                "title": "London update",
+                "url": "https://example.com/a1",
+                "published_at": "2026-04-10T00:00:00Z",
+                "source": "reddit",
+                "source_label": "Reddit",
+                "snippet": "London operations continue.",
+                "source_attribution": {"source_id": "reddit", "source_label": "Reddit"},
+            }
+        ],
+        "hits_count": 1,
+        "source_runs": [{"source_id": "reddit", "status": "success", "metadata": {"json_retried_429": True}, "warnings": []}],
+        "sources_attempted": ["reddit"],
+        "sources_succeeded": ["reddit"],
+        "sources_failed": [],
+        "telemetry": {"ingestion_duplicate_ratio": 0.0, "duplicate_map": []},
+    })
+
+    result = run_workflow(run_input)
+    validation = result["stages"]["validation"]
+    warning_rule_ids = {event["rule_id"] for event in validation["events"] if event["status"] == "warn"}
+
+    assert "FM-003-rate-limit-backoff" in warning_rule_ids
+    assert validation["stop_recommended"] is False
+
+
+def test_validation_detects_missing_artifact_contract() -> None:
+    validation = workflow._build_validation_report(
+        ingestion={"telemetry": {"ingestion_duplicate_ratio": 0.0}, "source_runs": [], "sources_attempted": []},
+        normalization={"valid_count": 1, "invalid_count": 0, "canonical_articles": [{"source": "reddit"}]},
+        clustering={"clusters": []},
+        geospatial={"entities": []},
+        citation_index={"citation_count": 1, "citations": [{"claim_classification": "supported"}]},
+        evidence_bundles={},
+        timeline=[],
+        warnings=[],
+        artifacts={"deduplicated_article_set": []},
+    )
+
+    failed_rule_ids = {event["rule_id"] for event in validation["events"] if event["status"] == "fail"}
+    assert "FM-011-silent-ui-degradation" in failed_rule_ids

@@ -1,121 +1,48 @@
-# UI-Executable Test Plan (Colab + Gradio Analyst Validation)
+# Test Plan (Failure Hardening + Trust Gates)
 
 ## 1) Purpose
-Validate that the in-repo Gradio analyst application is executable from Google Colab, preserves evidence traceability, and exposes inspectable outputs across all workflow stages.
+Validate that the in-repo Gradio + Colab workflow handles analyst-critical failure modes with explicit warning/stop behavior and no silent degradation.
 
-## 2) Test Environment
-- Primary execution path: `notebooks/news_discovery_colab.ipynb`.
-- UI launch: `gr_app.py` with `share=True`.
-- Workflow backend: `src/news_app/workflow.py` (real execution, no mock payload injection).
-- Source configuration: `config/sources.json`.
+## 2) Scope
+- Backend workflow and validation gates: `src/news_app/workflow.py`
+- Analyst-facing behavior surfaced through workflow outputs consumed by Gradio.
+- Automated checks: `tests/test_workflow.py`
 
-## 3) Acceptance Tests by Analyst Objective
+## 3) Pre-hardening trust gaps observed
+1. Warning generation existed, but stop-level publish gates were not first-class.
+2. Some high-impact conditions (empty ingestion, artifact contract breakage) needed explicit fail-state enforcement.
+3. Rate-limit retry behavior existed but lacked dedicated trust-gate eventing.
 
-### AT-1 Launch Reliability (Colab)
-1. Run notebook Sections 1-5 in sequence.
-2. Confirm Gradio process stays alive.
-3. Confirm a public Gradio URL is generated.
+## 4) Test matrix for required failure modes
 
-Expected:
-- Analyst can access UI from browser without local CLI use.
-- Launch path is reproducible on fresh Colab runtime.
+| Failure mode | Automated test coverage | Expected gate behavior |
+|---|---|---|
+| Duplicate article inflation | Existing + warning tests | WARN at elevated duplicates; STOP at severe ratio |
+| Source-specific failure | Existing ingestion failure tests | WARN partial failure; STOP if all fail |
+| Rate limiting/backoff | `test_reddit_retry_and_rss_fallback`, validation warning test | WARN with retry metadata |
+| Empty ingestion | `test_validation_stop_on_empty_ingestion` | STOP |
+| Schema drift across sources | Existing schema consistency + normalization counts | WARN/STOP by invalid ratio |
+| Weak source diversity | Existing warning generation test | WARN |
+| Misleading timeline spikes | Validation logic checks (rule FM-007) | WARN |
+| Low-confidence geospatial inference | Existing warning generation test + validation FM-008 | WARN |
+| Weak/duplicate-heavy clusters | Existing warning generation test + validation FM-009 | WARN |
+| Missing/weak citations | Existing citation artifact tests + validation FM-010 | WARN/STOP |
+| Silent UI degradation on missing artifacts | `test_validation_detects_missing_artifact_contract` | STOP |
 
-### AT-2 Per-Source Ingestion Visibility
-1. Run workflow for a current-events topic and recent date range.
-2. Inspect ingestion validation output.
-3. Confirm each configured source has status + article count:
-   - reddit
-   - google_news
-   - web_duckduckgo
-   - gdelt
-   - twitter (optional)
+## 5) Regression commands
+1. `pytest tests/test_workflow.py`
+2. Optional full suite: `pytest`
 
-Expected:
-- All sources appear in ingestion output, including failed/skipped states.
-- Source-level warnings are visible and inspectable.
+## 6) Analyst-visible verification in Colab/Gradio
+For one run with induced warnings:
+1. Confirm warning summary includes machine-generated warning codes.
+2. Confirm `stages.validation` payload is present.
+3. Confirm STOP gates set `can_publish=false` and `stop_recommended=true` for severe scenarios.
+4. Confirm source failure details remain visible per source.
 
-### AT-3 Partial Source Failure Handling
-1. Run without `TWITTER_BEARER_TOKEN`.
-2. Re-run workflow.
-
-Expected:
-- X/Twitter is marked as skipped/failed with explicit warning.
-- Overall run still completes; no fatal pipeline stop.
-
-### AT-4 Normalization + Duplicate Handling
-1. Inspect normalization panel/payload.
-2. Confirm `valid_count`, `invalid_count`, and canonical article list are visible.
-3. Inspect ingestion telemetry for duplicate ratio and duplicate map.
-
-Expected:
-- Normalization output is artifact-backed and inspectable.
-- Duplicate handling metrics are present and explainable.
-
-### AT-5 Clustering Output
-1. Inspect cluster summary + detail panels.
-2. Validate cluster counts and article membership.
-
-Expected:
-- Cluster records include IDs, labels, and article IDs.
-- Cluster output is consistent with canonical article set.
-
-### AT-6 Geospatial Output
-1. Inspect map and geospatial payload.
-2. Validate marker/entity counts and confidence/ambiguity metadata.
-
-Expected:
-- Geospatial output is present when location-bearing entities exist.
-- No-data geospatial state is explicit when absent.
-
-### AT-7 Timeline Correctness
-1. Inspect timeline panel and aggregation payload.
-2. Confirm daily counts are date-ordered and plausible.
-
-Expected:
-- Timeline ordering is correct.
-- Peak day inspection aligns with article-level evidence.
-
-### AT-8 Citation / Evidence Availability
-1. Inspect citation index and evidence bundle views.
-2. Compare citation count with available citation rows.
-
-Expected:
-- Citation/evidence records are present when canonical articles exist.
-- Traceability fields (article ID, URL/source metadata, claim classification where available) are inspectable.
-
-### AT-9 Warning Behavior
-1. Inspect run summary warning block.
-2. Inspect warnings payload in validation panel.
-
-Expected:
-- Warnings are explicit (not silent).
-- Warning details include code/category/message/metrics where provided.
-
-## 4) Notebook Diagnostic Procedure
-If UI panels look empty or inconsistent:
-1. Run notebook Section 6 smoke-test cells.
-2. Compare backend stage payloads directly:
-   - ingestion
-   - normalization
-   - clustering
-   - geospatial
-   - aggregation
-   - citation_traceability
-   - warnings
-3. Capture mismatch details (run ID, stage key, observed vs expected).
-
-## 5) Evidence Capture Requirements
-For each analyst validation run, capture:
-- run ID
-- topic and date range
-- source-level statuses
-- warning messages
-- pass/fail per acceptance test
-- screenshots of summary, timeline, map, cluster, and citation/evidence panels
-
-## 6) Exit Criteria
-Testing is accepted when:
-- Colab launch works without hidden manual steps.
-- Gradio UI is accessible via share URL.
-- All major outputs are inspectable from UI and/or diagnostics.
-- Optional Twitter token path degrades gracefully with explicit warnings.
+## 7) Exit criteria
+Accepted when:
+- key warning/stop rules execute deterministically,
+- major failure families are represented in automated tests,
+- no silent critical failure path remains undocumented or untested,
+- validation behavior is inspectable from workflow output payloads.

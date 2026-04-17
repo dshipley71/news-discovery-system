@@ -1,54 +1,68 @@
-# Validation Rules (In-Repo Multi-Source Workflow)
+# Validation Rules and Enforceable Trust Thresholds
 
 ## Purpose
-Define pass/warn/fail rules for backend artifacts produced by the in-repo workflow.
+Define machine-checkable validation rules for the in-repo analyst workflow so warning and stop behavior is deterministic, visible, and auditable.
 
-## Status semantics
-- **PASS:** artifact contract is valid.
-- **WARN:** artifact is usable but confidence is reduced.
-- **FAIL:** required contract is missing or unusable.
+## Validation output contract
+Each run emits `stages.validation` with:
+- `events[]` (rule-level decisions)
+- `warn_count`
+- `fail_count`
+- `stop_recommended`
+- `can_publish`
 
-## Artifact Contract Checks
+Each `event` includes:
+- `rule_id`
+- `status` (`warn` or `fail`)
+- `message`
+- `measured`
+- `threshold`
+- `analyst_visible_signal`
+- `fallback`
+- `stop_run`
+- `timestamp`
 
-### Deduplication and lineage
-- PASS: duplicate telemetry includes `ingestion_duplicate_ratio` and `duplicate_map[]` with canonical IDs.
-- WARN: duplicate ratio >= 0.20.
-- FAIL: duplicate map missing when articles exist.
+## Rule Set
 
-### Cluster artifact
-- PASS: every cluster has `cluster_id`, `cluster_label`, `article_ids`, `source_diversity`, `cluster_confidence`, and `temporal_span`.
-- WARN: cluster confidence < 0.55 or cluster has < 2 articles.
-- FAIL: cluster stage missing while canonical articles exist.
+| Rule ID | Failure mode | Status trigger | Enforceable threshold |
+|---|---|---|---|
+| FM-001-duplicate-inflation | Duplicate inflation | warn/fail | warn >= 0.35 duplicate ratio; fail >= 0.60 |
+| FM-002-source-specific-failure | Source failures | warn/fail | warn any non-success source; fail if all non-success |
+| FM-003-rate-limit-backoff | Rate limiting | warn | warn if source metadata indicates 429 retry/backoff |
+| FM-004-empty-ingestion | Empty canonical evidence | fail | fail if `valid_count == 0` |
+| FM-005-schema-drift | Schema drift | warn/fail | warn invalid ratio >= 0.20; fail >= 0.50 |
+| FM-006-weak-source-diversity | Weak diversity | warn | warn if unique sources <= 1 (with non-trivial evidence) |
+| FM-007-misleading-timeline-spikes | Misleading spikes | warn | warn if peak ratio >= 0.70 and duplicate ratio >= 0.35 |
+| FM-008-low-confidence-geospatial | Weak geo inference | warn | warn if all geo entities are ambiguous/low confidence |
+| FM-009-weak-clusters | Weak clustering | warn | warn if weak cluster ratio >= 0.75 |
+| FM-010-citation-support | Missing/weak citations | warn/fail | fail if citation coverage incomplete; warn if weak citation share >= 0.40 |
+| FM-011-silent-ui-degradation | Missing artifact contract | fail | fail if any required artifact key is absent |
 
-### Citation index
-- PASS: `citation_count == len(citations)` and every citation references canonical `article_id`.
-- WARN: speculative share > 0.40.
-- FAIL: missing citations for canonical articles in analysis mode.
+## Warn vs Stop policy
+- **Warn:** analyst may continue inspection, but must see issue and remediation in UI.
+- **Stop:** `stop_recommended=true`, `can_publish=false`; run data remains inspectable for diagnosis.
 
-### Evidence bundles
-- PASS: all three bundle families exist:
-  - `cluster_to_articles`
-  - `peak_to_clusters_articles`
-  - `location_to_clusters_articles`
-- WARN: peak/location bundle families are empty due to sparse upstream data.
-- FAIL: bundle stage absent.
+## Required artifact keys
+Validation enforces presence of:
+- `deduplicated_article_set`
+- `canonical_lineage_duplicate_map`
+- `cluster_artifact`
+- `citation_index`
+- `evidence_bundles`
+- `geospatial_entities_markers`
+- `analyst_warnings`
 
-### Geospatial
-- PASS: each geospatial entity includes location fields, confidence, extraction method, and article linkage.
-- WARN: ambiguous or low-confidence geo entities present.
-- FAIL: malformed geospatial records (missing `article_id` or coordinates where marker is emitted).
+## UI visibility requirements
+Major warnings and stop gates must be visible in Gradio outputs, not logs-only:
+1. run summary warning block,
+2. warning payload,
+3. validation payload.
 
-### Warning signals
-- PASS: warning stage present even if empty list.
-- FAIL: warning stage missing.
+## Publish safety rule
+A run is publish-safe only when:
+- `can_publish == true`
+- all stop rules pass
+- citation coverage is complete.
 
-## Analyst Warning Codes
-- `weak_source_diversity`
-- `duplicate_heavy_result_set`
-- `low_confidence_geo`
-- `weak_cluster_evidence`
-- `sparse_coverage`
-- `speculative_interpretation_risk`
-
-## Implementation note
-Current clustering and location extraction are explicitly heuristic and deterministic for reproducibility.
+## Lightweight implementation principle
+Rules stay in-repo and deterministic; thresholds are explicit constants/conditions, not hidden heuristics.

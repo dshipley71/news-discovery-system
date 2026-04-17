@@ -1,91 +1,77 @@
-# Evaluation Framework (Reliability-Focused)
+# Evaluation Framework (Trustworthiness and Failure Visibility)
 
 ## 1) Purpose
-Evaluate whether the analyst-facing Gradio workflow is reliable, inspectable, and safe against high-impact failure modes.
+Evaluate whether the Gradio + Colab analyst workflow is reliable under real-world failures and prevents silent trust erosion.
 
-## 2) Acceptance Criteria Mapping
-This framework enforces:
-- all major failure modes covered,
-- validation rules enforceable,
-- UI issues visible,
-- no silent failures.
+## 2) Readiness gates
+A run is considered trustworthy only if:
+1. all STOP rules pass,
+2. warnings are visible in UI,
+3. citation coverage is complete,
+4. artifact contract is intact.
 
-## 3) Reliability Scorecard
-Score each axis 0-5 and convert to weighted total (0-100).
-
-| Axis | Weight | What “good” looks like |
+## 3) Scoring rubric (0-100)
+| Axis | Weight | Passing interpretation |
 |---|---:|---|
-| Failure-mode coverage | 20 | All required failure modes have detection + prevention + UI + fallback. |
-| Validation enforceability | 20 | Rules are machine-checkable and stage-gated (stop/warn). |
-| Analyst visibility | 20 | Analyst can see status, thresholds, impacted artifacts, next actions. |
-| Evidence traceability | 20 | Claims, clusters, maps, and spikes resolve to citations/artifacts. |
-| Operational resilience | 10 | Partial outages handled safely without false confidence. |
-| Determinism/reproducibility | 10 | Same input yields consistent stage outcomes. |
+| Failure-mode coverage | 20 | All 11 required failure modes mapped to detection/prevention/UI/fallback/stop. |
+| Validation enforceability | 20 | `stages.validation` is machine-checkable and deterministic. |
+| Analyst visibility | 20 | WARN/STOP signals visible in run summary + payload panels. |
+| Citation traceability | 20 | Citation coverage complete; weak citation share disclosed. |
+| Operational resilience | 10 | Partial source failures and rate limiting degrade safely. |
+| UI degradation resistance | 10 | Missing artifacts trigger explicit STOP, not silent fallback. |
 
 Readiness bands:
-- **>= 85:** production-ready candidate
-- **70-84:** pilot-ready with tracked gaps
-- **< 70:** not ready
+- **>= 85:** production-candidate trust posture
+- **70-84:** pilot with monitored risk
+- **< 70:** not ready for analyst decision support
 
-## 4) Required KPI Set
+## 4) Required KPIs
 
-### 4.1 Failure-mode KPIs
-- Duplicate inflation incidents detected before publish (%).
-- Empty-ingestion runs correctly blocked (%).
-- Schema drift detection precision (% correct drift alerts).
-- Date-parse invalid rate and out-of-range suppression correctness.
-- UI state desync detection rate.
-- Geospatial ambiguity disclosure rate.
-- Weak-cluster disclosure rate.
-- Orphan-claim (missing citation) rate.
-- Spike anomaly relabeling rate.
+### Trust-gate KPIs
+- STOP-gate correctness rate (% critical cases correctly blocked).
+- False-safe rate (% unsafe runs incorrectly publishable).
+- Validation visibility rate (% warn/fail events visible in UI).
 
-### 4.2 Analyst-visibility KPIs
-- % WARN/FAIL events with remediation text.
-- % WARN/FAIL events with direct drill-down link.
-- Time-to-diagnose bad run from UI only.
+### Failure-mode KPIs
+- Duplicate inflation detection rate.
+- Empty-ingestion block rate.
+- Schema drift detection precision.
+- Partial-source-failure disclosure rate.
+- Rate-limit disclosure rate.
+- Weak geo disclosure rate.
+- Weak cluster disclosure rate.
+- Citation completeness block rate.
+- Artifact-contract failure detection rate.
 
-### 4.3 Publish-safety KPIs
-- % publish attempts blocked when citation coverage < 100%.
-- % publish attempts blocked when critical rules fail.
-- False-safe rate (runs incorrectly allowed despite critical issues).
+### Analyst-operations KPIs
+- Median time-to-diagnose from UI-only.
+- % runs with clear remediation text per warning/fail event.
 
-## 5) Stage Evaluation Checklist (Analyst Must See)
-For each stage, verify UI shows:
-1. Stage input summary.
-2. Pass/warn/fail outcome.
-3. Measured metrics vs thresholds.
-4. Affected artifact IDs.
-5. Recommended next action.
+## 5) Event audit requirements
+For each validation event persist:
+- rule_id,
+- measured values,
+- threshold text,
+- status,
+- stop flag,
+- timestamp.
 
-If any item is missing, mark stage as **visibility non-compliant**.
+This supports run-level trust audits and reviewer replay.
 
-## 6) Stop vs Warn Decision Audit
-Every decision must store:
-- rule ID,
-- measured value,
-- threshold,
-- status (warn/fail),
-- downstream actions blocked/unblocked,
-- timestamp and run ID.
+## 6) Current trust gaps identified pre-hardening
+1. Warning logic existed but no first-class stop gates.
+2. Empty ingestion and missing artifacts could degrade analyst trust if not explicitly blocked.
+3. Rate-limit behavior existed technically but lacked explicit validation-level signaling.
+4. Timeline spike reliability and citation sufficiency needed explicit trust thresholds.
 
-This is mandatory for post-run reliability audits.
+## 7) Hardening outcomes expected
+- No silent major failure paths.
+- Deterministic warn/stop thresholds.
+- Analyst-visible remediation for each major failure family.
 
-## 7) Risk Summary (Current)
-- Highest risk: silently misleading insights from duplicate inflation and spike artifacts.
-- Second highest risk: publishable reports with incomplete citations.
-- Third highest risk: Gradio UI state desync showing stale or incorrect run status.
+## 8) Remaining weak spots
+- Heuristic clustering and geospatial extraction still need future calibration against benchmark datasets.
+- Source-level retry telemetry is currently strongest for Reddit path; extend to all adapters over time.
 
-## 8) Fix Summary (This Documentation Revision)
-- Added explicit failure-mode matrix with detection/prevention/UI/fallback.
-- Added enforceable thresholds and stop/warn criteria.
-- Added analyst-visibility requirements and UI non-compliance criteria.
-- Added publish-safety KPIs for no-silent-failure operation.
-
-## 9) Remaining Gaps
-1. Final threshold tuning from production telemetry.
-2. Automated UI-state checksum instrumentation.
-3. Benchmark datasets for geo ambiguity and clustering quality calibration.
-
-## 10) Recommended Next Step
-Implement a lightweight "Validation Event Log" artifact (per stage) surfaced directly in Gradio so analysts and reviewers can inspect every rule decision without leaving the UI.
+## 9) Recommended next step
+Add a dedicated Gradio “Validation Gate” panel rendering `stages.validation.events` as a sortable table (rule, status, measured, threshold, fallback) for faster analyst triage.
