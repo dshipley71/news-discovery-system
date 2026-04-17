@@ -6,10 +6,11 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
+import hashlib
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
-from urllib.parse import quote_plus
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
 try:
     import requests
@@ -86,6 +87,57 @@ class SourceResult:
 
 
 SourceFetcher = Callable[[requests.Session, dict[str, Any], RunInput, int], SourceResult]
+
+
+STOPWORDS = {
+    "the",
+    "a",
+    "an",
+    "in",
+    "on",
+    "to",
+    "for",
+    "of",
+    "and",
+    "with",
+    "from",
+    "at",
+    "by",
+    "after",
+    "before",
+    "as",
+    "is",
+    "are",
+    "was",
+    "were",
+}
+
+GEO_LOCATION_LEXICON: dict[str, dict[str, Any]] = {
+    "new york": {"city": "New York", "region_or_state": "New York", "country": "USA", "latitude": 40.7128, "longitude": -74.006},
+    "london": {"city": "London", "region_or_state": "England", "country": "United Kingdom", "latitude": 51.5072, "longitude": -0.1276},
+    "paris": {"city": "Paris", "region_or_state": "Ile-de-France", "country": "France", "latitude": 48.8566, "longitude": 2.3522},
+    "tokyo": {"city": "Tokyo", "region_or_state": "Tokyo", "country": "Japan", "latitude": 35.6764, "longitude": 139.65},
+    "washington": {"city": "Washington", "region_or_state": "District of Columbia", "country": "USA", "latitude": 38.9072, "longitude": -77.0369},
+}
+
+
+def _stable_id(prefix: str, seed: str) -> str:
+    digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}:{digest}"
+
+
+def _canonicalize_url(url: str | None) -> str:
+    if not url:
+        return ""
+    parsed = urlparse(url.strip())
+    clean_query = urlencode(sorted(parse_qsl(parsed.query, keep_blank_values=False)))
+    canonical = parsed._replace(
+        scheme=parsed.scheme.lower(),
+        netloc=parsed.netloc.lower(),
+        query=clean_query,
+        fragment="",
+    )
+    return urlunparse(canonical).rstrip("/")
 
 
 def _load_source_configs() -> list[dict[str, Any]]:
@@ -182,8 +234,9 @@ def _normalize_article(source_id: str, source_label: str, raw: dict[str, Any]) -
     parsed_date = _parse_date(published_at)
     published_iso = parsed_date.isoformat() if parsed_date else (published_at or "")
 
-    article_id_seed = raw.get("external_id") or url or f"{title[:50]}:{published_iso}"
-    article_id = f"{source_id}:{abs(hash(article_id_seed))}"
+    canonical_url = _canonicalize_url(url)
+    article_id_seed = str(raw.get("external_id") or canonical_url or f"{title[:50]}:{published_iso}")
+    article_id = _stable_id(source_id, article_id_seed)
 
     return {
         "article_id": article_id,
@@ -522,26 +575,392 @@ SOURCE_ADAPTER_REGISTRY: dict[str, SourceFetcher] = {
 }
 
 
+def _dedupe_key(article: dict[str, Any]) -> str:
+    url_key = _canonicalize_url(article.get("url"))
+    title_key = re.sub(r"\s+", " ", str(article.get("title") or "").strip().lower())
+    date_key = str(article.get("published_at") or "")[:10]
+    return url_key or f"{title_key}:{date_key}"
+
+
 def _dedupe_articles(articles: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     deduped: list[dict[str, Any]] = []
-    seen_keys: set[str] = set()
+    canonical_by_key: dict[str, str] = {}
+    groups: dict[str, dict[str, Any]] = {}
     duplicate_count = 0
 
     for article in articles:
-        url = (article.get("url") or "").strip().lower()
-        title = (article.get("title") or "").strip().lower()
-        date_part = (article.get("published_at") or "")[:10]
-        key = url or f"{title}:{date_part}"
-        if key in seen_keys:
+        key = _dedupe_key(article)
+        group = groups.setdefault(
+            key,
+            {
+                "dedupe_key": key,
+                "canonical_article_id": None,
+                "canonical_source": None,
+                "canonical_url": article.get("url"),
+                "article_ids": [],
+            },
+        )
+        group["article_ids"].append(article.get("article_id"))
+
+        if key in canonical_by_key:
             duplicate_count += 1
             continue
-        seen_keys.add(key)
+
+        canonical_by_key[key] = article["article_id"]
+        group["canonical_article_id"] = article["article_id"]
+        group["canonical_source"] = article.get("source")
         deduped.append(article)
+
+    duplicate_map = [
+        {
+            **group,
+            "duplicate_article_ids": [
+                article_id
+                for article_id in group["article_ids"]
+                if article_id and article_id != group["canonical_article_id"]
+            ],
+            "duplicate_count": max(0, len(group["article_ids"]) - 1),
+        }
+        for _, group in sorted(groups.items(), key=lambda item: item[0])
+    ]
 
     return deduped, {
         "ingestion_duplicate_count": duplicate_count,
-        "ingestion_duplicate_ratio": (duplicate_count / len(articles)) if articles else 0,
+        "ingestion_duplicate_ratio": (duplicate_count / len(articles)) if articles else 0.0,
+        "duplicate_map": duplicate_map,
     }
+
+
+def _tokenize(text: str) -> list[str]:
+    tokens = re.findall(r"[a-z0-9]+", text.lower())
+    return [token for token in tokens if token not in STOPWORDS and len(token) > 2]
+
+
+def _cluster_key(article: dict[str, Any]) -> str:
+    combined = f"{article.get('title', '')} {article.get('snippet') or ''}".strip()
+    tokens = sorted(set(_tokenize(combined)))
+    return " ".join(tokens[:4]) or "misc"
+
+
+def _build_clusters(canonical_articles: list[dict[str, Any]]) -> dict[str, Any]:
+    cluster_groups: dict[str, list[dict[str, Any]]] = {}
+    for article in canonical_articles:
+        cluster_groups.setdefault(_cluster_key(article), []).append(article)
+
+    clusters: list[dict[str, Any]] = []
+    article_to_cluster: dict[str, str] = {}
+    for key in sorted(cluster_groups.keys()):
+        members = sorted(cluster_groups[key], key=lambda row: row["article_id"])
+        article_ids = [article["article_id"] for article in members]
+        sources = sorted({article.get("source") for article in members if article.get("source")})
+        parsed_times = [parsed for parsed in (_parse_date(row.get("published_at")) for row in members) if parsed]
+        start = min(parsed_times).isoformat() if parsed_times else None
+        end = max(parsed_times).isoformat() if parsed_times else None
+        source_diversity = len(sources)
+        confidence = round(
+            min(
+                1.0,
+                0.35 + (0.15 * min(len(members), 4)) + (0.2 * min(source_diversity, 3)),
+            ),
+            3,
+        )
+        cluster_id = _stable_id("cluster", key)
+        clusters.append(
+            {
+                "cluster_id": cluster_id,
+                "cluster_label": f"Lexical cluster: {key}",
+                "article_ids": article_ids,
+                "source_diversity": source_diversity,
+                "cluster_confidence": confidence,
+                "temporal_span": {
+                    "start": start,
+                    "end": end,
+                },
+                "heuristic": "deterministic_lexical_token_cluster_v1",
+            }
+        )
+        for article_id in article_ids:
+            article_to_cluster[article_id] = cluster_id
+
+    return {
+        "clusters": clusters,
+        "article_to_cluster": article_to_cluster,
+    }
+
+
+def _claim_classification(article: dict[str, Any]) -> str:
+    if article.get("claim_classification") in {"supported", "inferred", "speculative"}:
+        return article["claim_classification"]
+    if article.get("url") and article.get("published_at"):
+        return "supported"
+    if article.get("title"):
+        return "inferred"
+    return "speculative"
+
+
+def _build_citation_index(canonical_articles: list[dict[str, Any]], article_to_cluster: dict[str, str]) -> dict[str, Any]:
+    citations: list[dict[str, Any]] = []
+    classification_counts = {"supported": 0, "inferred": 0, "speculative": 0}
+    by_source: Counter[str] = Counter()
+
+    for article in sorted(canonical_articles, key=lambda row: row["article_id"]):
+        claim_classification = _claim_classification(article)
+        classification_counts[claim_classification] += 1
+        by_source[article.get("source") or "unknown"] += 1
+        citations.append(
+            {
+                "citation_id": _stable_id("cite", article["article_id"]),
+                "article_id": article["article_id"],
+                "cluster_id": article_to_cluster.get(article["article_id"]),
+                "claim_classification": claim_classification,
+                "url": article.get("url"),
+                "source": article.get("source"),
+                "source_label": article.get("source_label"),
+                "title": article.get("title"),
+                "published_at": article.get("published_at"),
+            }
+        )
+
+    return {
+        "citations": citations,
+        "citation_count": len(citations),
+        "claim_classification_counts": classification_counts,
+        "by_source": dict(by_source),
+    }
+
+
+def _extract_geospatial_entities(canonical_articles: list[dict[str, Any]]) -> dict[str, Any]:
+    entities: list[dict[str, Any]] = []
+    per_location: dict[str, dict[str, Any]] = {}
+
+    for article in sorted(canonical_articles, key=lambda row: row["article_id"]):
+        text = f"{article.get('title', '')} {article.get('snippet') or ''}".lower()
+        for location_key, location in GEO_LOCATION_LEXICON.items():
+            if re.search(rf"\b{re.escape(location_key)}\b", text):
+                entity_id = _stable_id("geo", f"{article['article_id']}:{location_key}")
+                entity = {
+                    "location_id": entity_id,
+                    "article_id": article["article_id"],
+                    "location_key": location_key,
+                    "city": location["city"],
+                    "region_or_state": location["region_or_state"],
+                    "country": location["country"],
+                    "latitude": location["latitude"],
+                    "longitude": location["longitude"],
+                    "confidence": 0.92,
+                    "extraction_method": "explicit",
+                    "ambiguity_flag": location_key == "paris",
+                    "ambiguity_notes": "Could refer to multiple regions" if location_key == "paris" else None,
+                    "evidence_text": location_key,
+                    "evidence_linkage": {"article_id": article["article_id"]},
+                }
+                entities.append(entity)
+                marker = per_location.setdefault(
+                    location_key,
+                    {
+                        "location_label": f"{location['city']}, {location['country']}",
+                        "city": location["city"],
+                        "region_or_state": location["region_or_state"],
+                        "country": location["country"],
+                        "latitude": location["latitude"],
+                        "longitude": location["longitude"],
+                        "article_ids": set(),
+                        "location_ids": [],
+                        "confidences": [],
+                        "ambiguous_count": 0,
+                    },
+                )
+                marker["article_ids"].add(article["article_id"])
+                marker["location_ids"].append(entity_id)
+                marker["confidences"].append(entity["confidence"])
+                marker["ambiguous_count"] += int(entity["ambiguity_flag"])
+
+    markers = []
+    for key in sorted(per_location.keys()):
+        marker = per_location[key]
+        article_ids = sorted(marker["article_ids"])
+        avg_confidence = round(sum(marker["confidences"]) / len(marker["confidences"]), 3)
+        markers.append(
+            {
+                "location_label": marker["location_label"],
+                "city": marker["city"],
+                "region_or_state": marker["region_or_state"],
+                "country": marker["country"],
+                "latitude": marker["latitude"],
+                "longitude": marker["longitude"],
+                "article_ids": article_ids,
+                "unique_article_count": len(article_ids),
+                "avg_confidence": avg_confidence,
+                "ambiguous_count": marker["ambiguous_count"],
+                "location_ids": marker["location_ids"],
+                "evidence_linkage": {"article_ids": article_ids, "location_ids": marker["location_ids"]},
+            }
+        )
+
+    return {
+        "entities": entities,
+        "map_markers": markers,
+    }
+
+
+def _build_evidence_bundles(
+    clusters: list[dict[str, Any]],
+    daily_counts: list[dict[str, Any]],
+    canonical_articles: list[dict[str, Any]],
+    citations: list[dict[str, Any]],
+    geospatial_markers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    citation_by_article = {citation["article_id"]: citation["citation_id"] for citation in citations}
+    article_to_cluster = {
+        article_id: cluster["cluster_id"] for cluster in clusters for article_id in cluster["article_ids"]
+    }
+
+    cluster_to_articles = [
+        {
+            "bundle_id": _stable_id("bundle", f"cluster:{cluster['cluster_id']}"),
+            "cluster_id": cluster["cluster_id"],
+            "article_ids": cluster["article_ids"],
+            "citation_ids": [
+                citation_by_article[article_id]
+                for article_id in cluster["article_ids"]
+                if article_id in citation_by_article
+            ],
+        }
+        for cluster in clusters
+    ]
+
+    article_day: dict[str, str | None] = {}
+    for article in canonical_articles:
+        parsed = _parse_date(article.get("published_at"))
+        article_day[article["article_id"]] = parsed.date().isoformat() if parsed else None
+
+    peak_to_clusters_articles: list[dict[str, Any]] = []
+    if daily_counts:
+        peak_count = max(point["article_count"] for point in daily_counts)
+        peak_days = [point["day"] for point in daily_counts if point["article_count"] == peak_count]
+        for day in peak_days:
+            matched_clusters = []
+            for cluster in clusters:
+                articles_for_day = [
+                    article_id
+                    for article_id in cluster["article_ids"]
+                    if article_day.get(article_id) == day
+                ]
+                if articles_for_day:
+                    matched_clusters.append(
+                        {
+                            "cluster_id": cluster["cluster_id"],
+                            "article_ids": articles_for_day,
+                        }
+                    )
+            peak_to_clusters_articles.append(
+                {
+                    "bundle_id": _stable_id("bundle", f"peak:{day}"),
+                    "peak_day": day,
+                    "peak_article_count": peak_count,
+                    "clusters": matched_clusters,
+                }
+            )
+
+    location_to_clusters_articles = []
+    for marker in geospatial_markers:
+        cluster_ids = sorted(
+            {article_to_cluster[article_id] for article_id in marker["article_ids"] if article_id in article_to_cluster}
+        )
+        location_to_clusters_articles.append(
+            {
+                "bundle_id": _stable_id("bundle", f"loc:{marker['location_label']}"),
+                "location_label": marker["location_label"],
+                "location_ids": marker["location_ids"],
+                "cluster_ids": cluster_ids,
+                "article_ids": marker["article_ids"],
+            }
+        )
+
+    return {
+        "cluster_to_articles": cluster_to_articles,
+        "peak_to_clusters_articles": peak_to_clusters_articles,
+        "location_to_clusters_articles": location_to_clusters_articles,
+    }
+
+
+def _build_warnings(
+    canonical_articles: list[dict[str, Any]],
+    clusters: list[dict[str, Any]],
+    duplicate_ratio: float,
+    geospatial_entities: list[dict[str, Any]],
+    citation_index: dict[str, Any],
+    timeline: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    unique_sources = len({article.get("source") for article in canonical_articles if article.get("source")})
+    if unique_sources < 2:
+        warnings.append(
+            {
+                "warning_code": "weak_source_diversity",
+                "severity": "warn",
+                "message": "Low source diversity may weaken corroboration.",
+                "metrics": {"unique_sources": unique_sources},
+            }
+        )
+    if duplicate_ratio >= 0.35:
+        warnings.append(
+            {
+                "warning_code": "duplicate_heavy_result_set",
+                "severity": "warn",
+                "message": "High duplicate ratio may inflate apparent activity.",
+                "metrics": {"duplicate_ratio": round(duplicate_ratio, 3)},
+            }
+        )
+    if geospatial_entities:
+        low_conf_geo = [entity for entity in geospatial_entities if float(entity["confidence"]) < 0.7]
+        ambiguous = [entity for entity in geospatial_entities if entity.get("ambiguity_flag")]
+        if low_conf_geo or ambiguous:
+            warnings.append(
+                {
+                    "warning_code": "low_confidence_geo",
+                    "severity": "warn",
+                    "message": "Low-confidence or ambiguous locations require analyst review.",
+                    "metrics": {
+                        "low_confidence_geo_count": len(low_conf_geo),
+                        "ambiguous_geo_count": len(ambiguous),
+                    },
+                }
+            )
+    weak_clusters = [cluster for cluster in clusters if len(cluster["article_ids"]) < 2 or cluster["cluster_confidence"] < 0.55]
+    if weak_clusters:
+        warnings.append(
+            {
+                "warning_code": "weak_cluster_evidence",
+                "severity": "warn",
+                "message": "Some clusters have limited supporting evidence.",
+                "metrics": {"weak_cluster_count": len(weak_clusters)},
+            }
+        )
+    if len(canonical_articles) < 3 or len(timeline) < 2:
+        warnings.append(
+            {
+                "warning_code": "sparse_coverage",
+                "severity": "warn",
+                "message": "Coverage is sparse across time and sources.",
+                "metrics": {"article_count": len(canonical_articles), "active_days": len(timeline)},
+            }
+        )
+    speculative = citation_index.get("claim_classification_counts", {}).get("speculative", 0)
+    if citation_index.get("citation_count", 0) and speculative / citation_index["citation_count"] > 0.4:
+        warnings.append(
+            {
+                "warning_code": "speculative_interpretation_risk",
+                "severity": "warn",
+                "message": "A high share of speculative claims increases interpretation risk.",
+                "metrics": {
+                    "speculative_count": speculative,
+                    "citation_count": citation_index["citation_count"],
+                },
+            }
+        )
+
+    return warnings
 
 
 def ingest_articles(run_input: RunInput, max_records: int = 60) -> dict[str, Any]:
@@ -702,6 +1121,26 @@ def run_workflow(run_input: RunInput) -> dict[str, Any]:
     ingestion = ingest_articles(run_input)
     normalization = normalize_articles(ingestion["raw_hits"], source="multi")
     timeline = aggregate_daily_counts(normalization["canonical_articles"])
+    clustering = _build_clusters(normalization["canonical_articles"])
+    citation_index = _build_citation_index(
+        normalization["canonical_articles"], clustering["article_to_cluster"]
+    )
+    geospatial = _extract_geospatial_entities(normalization["canonical_articles"])
+    evidence_bundles = _build_evidence_bundles(
+        clustering["clusters"],
+        timeline,
+        normalization["canonical_articles"],
+        citation_index["citations"],
+        geospatial["map_markers"],
+    )
+    warnings = _build_warnings(
+        canonical_articles=normalization["canonical_articles"],
+        clusters=clustering["clusters"],
+        duplicate_ratio=ingestion["telemetry"]["ingestion_duplicate_ratio"],
+        geospatial_entities=geospatial["entities"],
+        citation_index=citation_index,
+        timeline=timeline,
+    )
 
     return {
         "run_id": run_id,
@@ -714,9 +1153,28 @@ def run_workflow(run_input: RunInput) -> dict[str, Any]:
         "stages": {
             "ingestion": ingestion,
             "normalization": normalization,
+            "clustering": {
+                "clusters": clustering["clusters"],
+                "cluster_count": len(clustering["clusters"]),
+                "article_to_cluster": clustering["article_to_cluster"],
+            },
+            "citation_traceability": citation_index,
+            "evidence": evidence_bundles,
+            "geospatial": geospatial,
+            "warnings": warnings,
             "aggregation": {
                 "daily_counts": timeline,
                 "total_days": len(timeline),
+                "geospatial": {"map_markers": geospatial["map_markers"]},
             },
+        },
+        "artifacts": {
+            "deduplicated_article_set": normalization["canonical_articles"],
+            "canonical_lineage_duplicate_map": ingestion["telemetry"].get("duplicate_map", []),
+            "cluster_artifact": clustering["clusters"],
+            "citation_index": citation_index,
+            "evidence_bundles": evidence_bundles,
+            "geospatial_entities_markers": geospatial,
+            "analyst_warnings": warnings,
         },
     }
