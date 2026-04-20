@@ -89,8 +89,28 @@ Define first-class backend artifacts emitted by `run_workflow` in `src/news_app/
      - `first_seen_date`
      - `peak_date`
      - `last_seen_date`
-     - `lifecycle_stage`
-     - `daily_event_signal[]`
+   - `lifecycle_stage`
+   - `daily_event_signal[]`
+
+9. **Run review log export artifact**
+   - Path: `artifacts.run_review_log`
+   - Formats:
+     - `artifacts.run_review_log.json` (structured, deterministic review payload)
+     - `artifacts.run_review_log.markdown` (analyst-readable summary for ChatGPT copy/paste)
+   - JSON sections:
+     - `query_metadata`
+     - `source_retrieval_summary`
+     - `date_integrity_summary`
+     - `timeline_summary`
+     - `cluster_summary`
+     - `geospatial_summary`
+     - `validation_and_warnings`
+     - `analyst_review_note`
+   - Source of truth:
+     - Derived exclusively from workflow stage outputs (`stages.ingestion`, `stages.normalization`, `stages.aggregation`, `stages.clustering`, `stages.geospatial`, `stages.validation`, `stages.warnings`).
+   - Also mirrored in stages for UI panels:
+     - `stages.review_log`
+     - `stages.review_log_markdown`
 
 ## Dashboard Consumption Contract (Current)
 The Gradio dashboard reads artifacts directly with these mappings:
@@ -119,6 +139,9 @@ The Gradio dashboard reads artifacts directly with these mappings:
   - `artifacts.evidence_bundles`
 - **Validation panels**
   - ingestion, normalization, aggregation, clustering, geospatial, warnings payloads from `stages.*`
+- **Run review export panel**
+  - markdown export: `stages.review_log_markdown` (fallback: `artifacts.run_review_log.markdown`)
+  - JSON export: `stages.review_log` (fallback: `artifacts.run_review_log.json`)
 
 ## Determinism and Reproducibility
 - IDs are generated with deterministic SHA-1-based seeds.

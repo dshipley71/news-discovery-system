@@ -47,6 +47,11 @@ Validate that the in-repo Gradio + Colab workflow handles analyst-critical failu
 | Missing/weak citations | Existing citation artifact tests + validation FM-010 | WARN/STOP |
 | Silent UI degradation on missing artifacts | `test_validation_detects_missing_artifact_contract` | STOP |
 | Timeline mismatch trust gate | Validation logic checks (rule FM-012) | STOP |
+| Run review log generation (success) | `test_run_review_log_generation_success` | Structured + markdown artifact emitted every run |
+| Run review log with partial source failures | `test_run_review_log_partial_source_failure` | Partial failure details exposed in review output |
+| Run review log undated handling | `test_run_review_log_tracks_undated_articles` | Undated metrics and percent are explicit |
+| Run review log with weak geospatial output | `test_run_review_log_handles_missing_geospatial_map` | Geo summary remains structured with empty marker state |
+| Review export payload shape stability | `test_run_review_export_payload_shape_stable` | JSON section contract remains stable |
 
 ## 5) Regression commands
 1. `pytest tests/test_workflow.py`

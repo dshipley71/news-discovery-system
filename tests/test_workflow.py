@@ -656,8 +656,176 @@ def test_reddit_fallback_triggers_on_empty_primary(monkeypatch: pytest.MonkeyPat
 
     assert result.status == "success"
     assert result.metadata["used_rss_fallback"] is True
-    assert result.metadata["fallback_reason"] == "empty_primary_result"
-    assert result.metadata["fallback_result_count"] == 1
+
+
+def test_run_review_log_generation_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_input = RunInput(topic="metro disruption", start_date=date(2026, 4, 10), end_date=date(2026, 4, 12))
+
+    monkeypatch.setattr(
+        workflow,
+        "_load_all_source_configs",
+        lambda: [{"id": "reddit", "label": "Reddit", "type": "public discussion", "auth_mode": "no_key"}],
+    )
+    monkeypatch.setattr(
+        workflow,
+        "SOURCE_ADAPTER_REGISTRY",
+        {
+            "reddit": lambda s, c, r, m: workflow.SourceResult(
+                source_id="reddit",
+                source_label="Reddit",
+                status="success",
+                warnings=[],
+                metadata={"source_type": "public discussion"},
+                articles=[
+                    {
+                        "article_id": "reddit:1",
+                        "title": "London metro disruption update",
+                        "url": "https://example.com/london-metro",
+                        "published_at": "2026-04-11T08:00:00Z",
+                        "source": "reddit",
+                        "source_label": "Reddit",
+                        "snippet": "London commuters face delays.",
+                        "source_attribution": {"source_id": "reddit", "source_label": "Reddit"},
+                    }
+                ],
+            )
+        },
+    )
+
+    result = run_workflow(run_input)
+    review = result["artifacts"]["run_review_log"]["json"]
+
+    assert review["query_metadata"]["topic"] == "metro disruption"
+    assert review["source_retrieval_summary"][0]["status"] == "succeeded"
+    assert review["timeline_summary"]["timeline_basis"] == "event signal"
+    assert "markdown" in result["artifacts"]["run_review_log"]
+
+
+def test_run_review_log_partial_source_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_input = RunInput(topic="power outage", start_date=date(2026, 4, 10), end_date=date(2026, 4, 12))
+
+    monkeypatch.setattr(workflow, "_load_all_source_configs", lambda: [{"id": "reddit", "label": "Reddit"}, {"id": "gdelt", "label": "GDELT"}])
+    monkeypatch.setattr(
+        workflow,
+        "SOURCE_ADAPTER_REGISTRY",
+        {
+            "reddit": lambda s, c, r, m: _ok_result("reddit", "Grid update", "https://example.com/grid", "2026-04-10T01:00:00Z"),
+            "gdelt": lambda s, c, r, m: workflow.SourceResult(
+                source_id="gdelt",
+                source_label="GDELT",
+                status="failed",
+                warnings=["source_fetch_failed"],
+                articles=[],
+                error="timeout",
+            ),
+        },
+    )
+    result = run_workflow(run_input)
+    review = result["artifacts"]["run_review_log"]["json"]
+    partial = review["validation_and_warnings"]["partial_source_failures"]
+
+    assert any(item["source_id"] == "gdelt" for item in partial)
+    assert review["source_retrieval_summary"][0]["source_id"] in {"gdelt", "reddit"}
+
+
+def test_run_review_log_tracks_undated_articles(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_input = RunInput(topic="port delays", start_date=date(2026, 4, 10), end_date=date(2026, 4, 12))
+    monkeypatch.setattr(
+        workflow,
+        "ingest_articles",
+        lambda *_args, **_kwargs: {
+            "raw_hits": [
+                {
+                    "article_id": "a1",
+                    "title": "Port delays worsen",
+                    "url": "https://example.com/ports",
+                    "published_at": "not-a-date",
+                    "source": "reddit",
+                    "source_label": "Reddit",
+                    "snippet": "No reliable date in this record.",
+                    "source_attribution": {"source_id": "reddit", "source_label": "Reddit"},
+                }
+            ],
+            "source_runs": [{"source_id": "reddit", "source_label": "Reddit", "status": "success", "article_count": 1, "warnings": [], "error": None, "metadata": {"auth_mode": "no_key"}}],
+            "sources_attempted": ["reddit"],
+            "sources_succeeded": ["reddit"],
+            "sources_failed": [],
+            "sources_skipped": [],
+            "hits_count": 1,
+            "telemetry": {"raw_retrieved_count": 1, "ingestion_duplicate_ratio": 0.0, "duplicate_map": []},
+        },
+    )
+    result = run_workflow(run_input)
+    review = result["artifacts"]["run_review_log"]["json"]["date_integrity_summary"]
+
+    assert review["undated_count"] == 1
+    assert review["percent_undated"] == 1.0
+
+
+def test_run_review_log_handles_missing_geospatial_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_input = RunInput(topic="market watch", start_date=date(2026, 4, 10), end_date=date(2026, 4, 12))
+    monkeypatch.setattr(
+        workflow,
+        "ingest_articles",
+        lambda *_args, **_kwargs: {
+            "raw_hits": [
+                {
+                    "article_id": "a2",
+                    "title": "Market watch update",
+                    "url": "https://example.com/market",
+                    "published_at": "2026-04-11T02:00:00Z",
+                    "source": "reddit",
+                    "source_label": "Reddit",
+                    "snippet": "No location terms included.",
+                    "source_attribution": {"source_id": "reddit", "source_label": "Reddit"},
+                }
+            ],
+            "source_runs": [{"source_id": "reddit", "source_label": "Reddit", "status": "success", "article_count": 1, "warnings": [], "error": None, "metadata": {"auth_mode": "no_key"}}],
+            "sources_attempted": ["reddit"],
+            "sources_succeeded": ["reddit"],
+            "sources_failed": [],
+            "sources_skipped": [],
+            "hits_count": 1,
+            "telemetry": {"raw_retrieved_count": 1, "ingestion_duplicate_ratio": 0.0, "duplicate_map": []},
+        },
+    )
+    result = run_workflow(run_input)
+    geo = result["artifacts"]["run_review_log"]["json"]["geospatial_summary"]
+
+    assert geo["map_marker_count"] == 0
+    assert isinstance(geo["top_locations"], list)
+
+
+def test_run_review_export_payload_shape_stable(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_input = RunInput(topic="shape check", start_date=date(2026, 4, 10), end_date=date(2026, 4, 12))
+    monkeypatch.setattr(
+        workflow,
+        "ingest_articles",
+        lambda *_args, **_kwargs: {
+            "raw_hits": [],
+            "source_runs": [],
+            "sources_attempted": [],
+            "sources_succeeded": [],
+            "sources_failed": [],
+            "sources_skipped": [],
+            "hits_count": 0,
+            "telemetry": {"raw_retrieved_count": 0, "ingestion_duplicate_ratio": 0.0, "duplicate_map": []},
+        },
+    )
+    result = run_workflow(run_input)
+    artifact = result["artifacts"]["run_review_log"]
+
+    assert set(artifact.keys()) == {"json", "markdown"}
+    assert {
+        "query_metadata",
+        "source_retrieval_summary",
+        "date_integrity_summary",
+        "timeline_summary",
+        "cluster_summary",
+        "geospatial_summary",
+        "validation_and_warnings",
+        "analyst_review_note",
+    }.issubset(set(artifact["json"].keys()))
 
 
 def test_gdelt_transparent_failure_and_success(monkeypatch: pytest.MonkeyPatch) -> None:

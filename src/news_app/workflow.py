@@ -2027,6 +2027,310 @@ def _build_validation_report(
     }
 
 
+def _source_settings_state(source_run: dict[str, Any]) -> str:
+    metadata = source_run.get("metadata") or {}
+    status = source_run.get("status")
+    auth_mode = metadata.get("auth_mode", "no_key")
+    credential_present = bool(metadata.get("credential_present"))
+
+    if status == "skipped":
+        return "skipped"
+    if status == "failed":
+        return "failed"
+    if auth_mode == "no_key":
+        return "no key needed"
+    if auth_mode == "optional_key" and not credential_present:
+        return "optional key not set"
+    if auth_mode == "required_key" and credential_present:
+        return "required key configured"
+    return "no key needed"
+
+
+def _normalized_source_status(status: str) -> str:
+    normalized = {
+        "success": "succeeded",
+        "failed": "failed",
+        "skipped": "skipped",
+        "partial": "partial",
+        "empty": "empty",
+    }
+    return normalized.get(status, status)
+
+
+def _timeline_trend_direction(event_signal_timeline: list[dict[str, Any]]) -> str:
+    if len(event_signal_timeline) < 2:
+        return "flat"
+    first_signal = int(event_signal_timeline[0].get("event_signal", 0) or 0)
+    last_signal = int(event_signal_timeline[-1].get("event_signal", 0) or 0)
+    if last_signal > first_signal:
+        return "increasing"
+    if last_signal < first_signal:
+        return "decreasing"
+    return "flat"
+
+
+def _build_run_review_log(
+    *,
+    run_id: str,
+    started_at: str,
+    run_input: RunInput,
+    ingestion: dict[str, Any],
+    normalization: dict[str, Any],
+    lifecycle_clusters: list[dict[str, Any]],
+    event_signal_timeline: list[dict[str, Any]],
+    geospatial: dict[str, Any],
+    warnings: list[dict[str, Any]],
+    validation: dict[str, Any],
+) -> dict[str, Any]:
+    source_runs = ingestion.get("source_runs", [])
+    telemetry = ingestion.get("telemetry", {})
+    dated_count = sum(
+        1
+        for article in normalization.get("canonical_articles", [])
+        if article.get("timeline_date_used") not in {None, "unknown"}
+    )
+    undated_count = int(normalization.get("undated_article_count", 0) or 0)
+    valid_count = int(normalization.get("valid_count", 0) or 0)
+    percent_undated = round((undated_count / valid_count), 3) if valid_count else 0.0
+
+    source_summary: list[dict[str, Any]] = []
+    for run in source_runs:
+        metadata = run.get("metadata") or {}
+        source_summary.append(
+            {
+                "source_id": run.get("source_id"),
+                "source_label": run.get("source_label"),
+                "source_class": metadata.get("source_type"),
+                "status": _normalized_source_status(run.get("status", "unknown")),
+                "articles_returned": int(run.get("article_count", 0) or 0),
+                "fallback_used": bool(metadata.get("used_rss_fallback", False)),
+                "error_detail": run.get("error"),
+                "retry_count": int(metadata.get("json_retry_attempts", 0) or 0),
+            }
+        )
+    source_summary = sorted(source_summary, key=lambda item: str(item.get("source_id") or ""))
+
+    source_settings_state = sorted(
+        [
+            {
+                "source_id": run.get("source_id"),
+                "source_label": run.get("source_label"),
+                "state": _source_settings_state(run),
+            }
+            for run in source_runs
+        ],
+        key=lambda item: str(item.get("source_id") or ""),
+    )
+
+    peak_point = (
+        max(event_signal_timeline, key=lambda point: int(point.get("event_signal", 0) or 0))
+        if event_signal_timeline
+        else None
+    )
+    timeline_source_by_day = [
+        {
+            "day": point.get("day"),
+            "source_breakdown": point.get("source_breakdown", []),
+        }
+        for point in event_signal_timeline
+    ]
+
+    top_clusters = sorted(
+        lifecycle_clusters,
+        key=lambda cluster: (
+            -len(cluster.get("article_ids", [])),
+            -float(cluster.get("cluster_confidence", 0.0) or 0.0),
+            str(cluster.get("cluster_id") or ""),
+        ),
+    )[:5]
+    weak_clusters = [
+        cluster
+        for cluster in lifecycle_clusters
+        if len(cluster.get("article_ids", [])) < 2 or float(cluster.get("cluster_confidence", 0.0) or 0.0) < 0.55
+    ]
+
+    map_markers = geospatial.get("map_markers", [])
+    top_locations = sorted(
+        map_markers,
+        key=lambda marker: (
+            -int(marker.get("article_count", 0) or 0),
+            str(marker.get("location_label") or ""),
+        ),
+    )[:5]
+    geo_entities = geospatial.get("entities", [])
+    low_conf_geo_count = sum(1 for entity in geo_entities if float(entity.get("confidence", 0.0) or 0.0) < 0.7)
+    location_type_counts = dict(Counter(entity.get("location_type") or "unknown" for entity in geo_entities))
+    validation_events = validation.get("events", [])
+    warning_events = [event for event in validation_events if event.get("status") == "warn"]
+    fail_events = [event for event in validation_events if event.get("status") == "fail"]
+    partial_failures = [
+        item for item in source_summary if item.get("status") in {"failed", "skipped", "partial", "empty"}
+    ]
+
+    analyst_note_credible = "Cross-source coverage exists with dated timeline points."
+    analyst_note_weak = "Signal is sparse or concentrated; interpret trends cautiously."
+    analyst_note_review = "Review warning gates, low-confidence geospatial points, and partial source failures."
+    if len(ingestion.get("sources_succeeded", [])) <= 1:
+        analyst_note_credible = "At least one source returned data, but corroboration is limited."
+    if low_conf_geo_count == 0 and map_markers:
+        analyst_note_weak = "Geospatial extraction appears consistent for mapped points."
+    if not warning_events and not fail_events and not partial_failures:
+        analyst_note_review = "No validation gates fired; spot-check top clusters and citations before publishing."
+
+    return {
+        "query_metadata": {
+            "run_id": run_id,
+            "topic": run_input.topic,
+            "start_date": run_input.start_date.isoformat(),
+            "end_date": run_input.end_date.isoformat(),
+            "execution_timestamp": started_at,
+            "enabled_sources": sorted(ingestion.get("sources_attempted", [])),
+            "source_settings_state": source_settings_state,
+        },
+        "source_retrieval_summary": source_summary,
+        "date_integrity_summary": {
+            "total_ingested": int(ingestion.get("hits_count", 0) or 0),
+            "total_valid": valid_count,
+            "dated_count": dated_count,
+            "undated_count": undated_count,
+            "percent_undated": percent_undated,
+            "parse_failed_count": int(normalization.get("date_status_counts", {}).get("parse_failed", 0) or 0),
+            "missing_date_count": int(normalization.get("date_status_counts", {}).get("missing", 0) or 0),
+        },
+        "timeline_summary": {
+            "active_days": len(event_signal_timeline),
+            "total_article_instances": int(telemetry.get("raw_retrieved_count", 0) or 0),
+            "peak_day": peak_point.get("day") if peak_point else None,
+            "peak_count": int(peak_point.get("event_signal", 0) or 0) if peak_point else 0,
+            "trend_direction": _timeline_trend_direction(event_signal_timeline),
+            "timeline_basis": "event signal" if event_signal_timeline else "raw article count",
+            "source_contribution_by_day": timeline_source_by_day,
+        },
+        "cluster_summary": {
+            "cluster_count": len(lifecycle_clusters),
+            "weak_cluster_count": len(weak_clusters),
+            "top_clusters": [
+                {
+                    "cluster_id": cluster.get("cluster_id"),
+                    "cluster_label": cluster.get("cluster_label"),
+                    "article_count": len(cluster.get("article_ids", [])),
+                    "source_diversity": int(cluster.get("source_diversity", 0) or 0),
+                    "confidence": float(cluster.get("cluster_confidence", 0.0) or 0.0),
+                    "first_seen_date": cluster.get("first_seen_date"),
+                    "peak_date": cluster.get("peak_date"),
+                }
+                for cluster in top_clusters
+            ],
+        },
+        "geospatial_summary": {
+            "map_marker_count": len(map_markers),
+            "location_type_counts": location_type_counts,
+            "low_confidence_geo_count": low_conf_geo_count,
+            "top_locations": [
+                {
+                    "label": marker.get("location_label"),
+                    "article_count": int(marker.get("article_count", 0) or 0),
+                    "confidence": float(marker.get("avg_confidence", 0.0) or 0.0),
+                    "location_type": marker.get("location_type"),
+                }
+                for marker in top_locations
+            ],
+        },
+        "validation_and_warnings": {
+            "can_publish": bool(validation.get("can_publish", True)),
+            "warn_count": int(validation.get("warn_count", 0) or 0),
+            "fail_count": int(validation.get("fail_count", 0) or 0),
+            "warnings": [
+                {
+                    "warning_code": warning.get("warning_code"),
+                    "severity": warning.get("severity"),
+                    "message": warning.get("message"),
+                    "metrics": warning.get("metrics"),
+                }
+                for warning in warnings
+            ],
+            "validation_gates": [
+                {
+                    "rule_id": event.get("rule_id"),
+                    "status": event.get("status"),
+                    "message": event.get("message"),
+                }
+                for event in validation_events
+            ],
+            "partial_source_failures": partial_failures,
+        },
+        "analyst_review_note": {
+            "credible_signals": analyst_note_credible,
+            "weak_signals": analyst_note_weak,
+            "needs_review": analyst_note_review,
+        },
+    }
+
+
+def _render_run_review_markdown(review_log: dict[str, Any]) -> str:
+    query = review_log.get("query_metadata", {})
+    date_integrity = review_log.get("date_integrity_summary", {})
+    timeline = review_log.get("timeline_summary", {})
+    cluster = review_log.get("cluster_summary", {})
+    geospatial = review_log.get("geospatial_summary", {})
+    validation = review_log.get("validation_and_warnings", {})
+    analyst_note = review_log.get("analyst_review_note", {})
+    top_clusters = cluster.get("top_clusters", [])
+    top_locations = geospatial.get("top_locations", [])
+    partial_sources = validation.get("partial_source_failures", [])
+
+    cluster_lines = "\n".join(
+        [
+            f"- `{item.get('cluster_id')}` {item.get('cluster_label')} | articles={item.get('article_count')} | sources={item.get('source_diversity')} | confidence={item.get('confidence'):.2f}"
+            for item in top_clusters
+        ]
+    ) or "- none"
+    location_lines = "\n".join(
+        [
+            f"- {item.get('label')} | articles={item.get('article_count')} | confidence={item.get('confidence'):.2f} | type={item.get('location_type')}"
+            for item in top_locations
+        ]
+    ) or "- none"
+    partial_source_lines = "\n".join(
+        [
+            f"- {item.get('source_id')} ({item.get('status')}), articles={item.get('articles_returned')}, error={item.get('error_detail') or 'none'}"
+            for item in partial_sources
+        ]
+    ) or "- none"
+
+    return (
+        "## Run Review Artifact\n"
+        f"- **Run ID:** `{query.get('run_id')}`\n"
+        f"- **Topic:** {query.get('topic')}\n"
+        f"- **Date range:** `{query.get('start_date')} → {query.get('end_date')}`\n"
+        f"- **Executed at:** `{query.get('execution_timestamp')}`\n"
+        f"- **Enabled sources:** {', '.join(query.get('enabled_sources', [])) or 'none'}\n\n"
+        "### Date Integrity\n"
+        f"- Total ingested: {date_integrity.get('total_ingested', 0)}\n"
+        f"- Total valid: {date_integrity.get('total_valid', 0)}\n"
+        f"- Dated: {date_integrity.get('dated_count', 0)} | Undated: {date_integrity.get('undated_count', 0)} ({float(date_integrity.get('percent_undated', 0.0) or 0.0):.1%})\n"
+        f"- Parse failed: {date_integrity.get('parse_failed_count', 0)} | Missing date: {date_integrity.get('missing_date_count', 0)}\n\n"
+        "### Timeline\n"
+        f"- Active days: {timeline.get('active_days', 0)}\n"
+        f"- Peak day: {timeline.get('peak_day')} (count={timeline.get('peak_count', 0)})\n"
+        f"- Trend direction: {timeline.get('trend_direction')}\n"
+        f"- Basis: {timeline.get('timeline_basis')}\n\n"
+        "### Clusters\n"
+        f"- Cluster count: {cluster.get('cluster_count', 0)} | Weak clusters: {cluster.get('weak_cluster_count', 0)}\n"
+        f"{cluster_lines}\n\n"
+        "### Geospatial\n"
+        f"- Map markers: {geospatial.get('map_marker_count', 0)} | Low-confidence geo: {geospatial.get('low_confidence_geo_count', 0)}\n"
+        f"{location_lines}\n\n"
+        "### Validation and Warnings\n"
+        f"- can_publish: `{validation.get('can_publish', True)}` | warn={validation.get('warn_count', 0)} | fail={validation.get('fail_count', 0)}\n"
+        f"- Partial source failures:\n{partial_source_lines}\n\n"
+        "### Analyst Review Note\n"
+        f"- **Credible:** {analyst_note.get('credible_signals', '')}\n"
+        f"- **Weak:** {analyst_note.get('weak_signals', '')}\n"
+        f"- **Needs review:** {analyst_note.get('needs_review', '')}\n"
+    )
+
+
 def ingest_articles(
     run_input: RunInput,
     max_records: int | None = None,
@@ -2480,6 +2784,20 @@ def run_workflow(run_input: RunInput, source_settings: dict[str, Any] | None = N
         warnings=warnings,
         artifacts=artifacts,
     )
+    review_log = _build_run_review_log(
+        run_id=run_id,
+        started_at=started_at,
+        run_input=run_input,
+        ingestion=ingestion,
+        normalization=normalization,
+        lifecycle_clusters=lifecycle_clusters,
+        event_signal_timeline=event_signal_timeline,
+        geospatial=geospatial,
+        warnings=warnings,
+        validation=validation,
+    )
+    review_markdown = _render_run_review_markdown(review_log)
+    artifacts["run_review_log"] = {"json": review_log, "markdown": review_markdown}
 
     return {
         "run_id": run_id,
@@ -2504,6 +2822,8 @@ def run_workflow(run_input: RunInput, source_settings: dict[str, Any] | None = N
             "geospatial": geospatial,
             "warnings": warnings,
             "validation": validation,
+            "review_log": review_log,
+            "review_log_markdown": review_markdown,
             "aggregation": {
                 "daily_counts": event_signal_timeline,
                 "event_signal_timeline": event_signal_timeline,

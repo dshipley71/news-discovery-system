@@ -700,6 +700,8 @@ def run_ui_workflow(
             "{}",
             "{}",
             "{}",
+            "Run review artifact unavailable because workflow execution failed.",
+            "{}",
             _default_source_rows(),
             "{}",
             empty_fig,
@@ -753,6 +755,14 @@ def run_ui_workflow(
         _pretty_json(cluster_views["cluster_lookup"]),
         _pretty_json(peak_lookup),
         _pretty_json(location_lookup),
+        stages.get("review_log_markdown")
+        or (result.get("artifacts", {}).get("run_review_log", {}) or {}).get("markdown")
+        or "Run review artifact unavailable.",
+        _pretty_json(
+            stages.get("review_log")
+            or (result.get("artifacts", {}).get("run_review_log", {}) or {}).get("json")
+            or {}
+        ),
         [
             [
                 run.get("source_id"),
@@ -934,6 +944,9 @@ Run once and review run summary, timeline, map, clusters, citations, and validat
             geospatial_payload = gr.Code(label="Geospatial Payload", language="json")
             warning_payload = gr.Code(label="Warning Payload", language="json")
             source_settings_payload = gr.Code(label="Source Settings Payload", language="json")
+        with gr.Accordion("Run Review Log Export (ChatGPT-ready)", open=False):
+            review_markdown = gr.Markdown("Run workflow to generate a copyable markdown review artifact.")
+            review_json = gr.Code(label="Run Review JSON", language="json")
 
         cluster_lookup = gr.Textbox(value="{}", visible=False)
         peak_lookup = gr.Textbox(value="{}", visible=False)
@@ -1020,6 +1033,8 @@ Run once and review run summary, timeline, map, clusters, citations, and validat
                 cluster_lookup,
                 peak_lookup,
                 location_lookup,
+                review_markdown,
+                review_json,
                 source_settings_table,
                 source_settings_payload,
                 timeline_plot,
