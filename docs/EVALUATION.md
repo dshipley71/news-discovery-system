@@ -42,6 +42,8 @@ Readiness bands:
 - Weak cluster disclosure rate.
 - Citation completeness block rate.
 - Artifact-contract failure detection rate.
+- Temporal anomaly detection rate (late coverage spikes vs event signal).
+- Source-dominance disclosure rate for peak days.
 
 ### Analyst-operations KPIs
 - Median time-to-diagnose from UI-only.
@@ -72,6 +74,7 @@ This supports run-level trust audits and reviewer replay.
 ## 8) Remaining weak spots
 - Heuristic clustering and geospatial extraction still need future calibration against benchmark datasets.
 - Source-level retry telemetry is currently strongest for Reddit path; extend to all adapters over time.
+- Event lifecycle modeling is deterministic/heuristic and should be benchmarked against known event calendars.
 
 ## 9) Recommended next step
 Add a dedicated Gradio “Validation Gate” panel rendering `stages.validation.events` as a sortable table (rule, status, measured, threshold, fallback) for faster analyst triage.
