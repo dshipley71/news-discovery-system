@@ -457,6 +457,7 @@ def fetch_web_duckduckgo(
     source_id = source["id"]
     source_label = source["label"]
     warnings: list[str] = []
+    resolved_max_records = _resolve_max_records(max_records, source, default=100)
 
     response = session.get(source["endpoint"], params={"q": run_input.topic}, timeout=20)
     response.raise_for_status()
@@ -540,6 +541,7 @@ def fetch_gdelt(
         "api_key_provided": bool(api_key),
         "http_status": None,
         "response_bytes": 0,
+        "result_state": "failed",
     }
     warnings: list[str] = []
     try:
@@ -581,6 +583,11 @@ def fetch_gdelt(
 
     if not raw_items:
         warnings.append("gdelt_empty_result")
+        metadata["result_state"] = "empty"
+    elif len(raw_items) < resolved_max_records:
+        metadata["result_state"] = "partial"
+    else:
+        metadata["result_state"] = "full"
 
     return SourceResult(
         source_id=source_id,
@@ -1405,9 +1412,11 @@ def _build_validation_report(
         )
 
     if timeline:
-        peak_count = max(point.get("article_count", 0) for point in timeline)
+        known_timeline = [point for point in timeline if point.get("day") != "unknown"]
+        peak_candidates = known_timeline or timeline
+        peak_count = max(point.get("article_count", 0) for point in peak_candidates)
         total = sum(point.get("article_count", 0) for point in timeline)
-        peak_days = [point.get("day") for point in timeline if point.get("article_count", 0) == peak_count]
+        peak_days = [point.get("day") for point in peak_candidates if point.get("article_count", 0) == peak_count]
         peak_ratio = (peak_count / total) if total else 0.0
         if peak_ratio >= 0.7 and duplicate_ratio >= 0.35:
             add_event(
@@ -1599,7 +1608,6 @@ def ingest_articles(run_input: RunInput, max_records: int | None = None) -> dict
                 if len(result.articles) == 0:
                     empty.append(source_id)
             elif result.status == "skipped":
-                failed.append(source_id)
                 skipped.append(source_id)
             else:
                 failed.append(source_id)
@@ -1630,6 +1638,17 @@ def ingest_articles(run_input: RunInput, max_records: int | None = None) -> dict
             )
 
     deduped_articles, dedupe_meta = _dedupe_articles(all_articles)
+    per_source_telemetry = {
+        run["source_id"]: {
+            "attempted": run["source_id"] in attempted,
+            "succeeded": run["status"] == "success",
+            "failed": run["status"] == "failed",
+            "skipped": run["status"] == "skipped",
+            "article_count": run["article_count"],
+            "fallback_used": bool((run.get("metadata") or {}).get("used_rss_fallback")),
+        }
+        for run in source_runs
+    }
 
     return {
         "requested_at": requested_at,
@@ -1648,6 +1667,7 @@ def ingest_articles(run_input: RunInput, max_records: int | None = None) -> dict
             },
             "per_source_warnings": {run["source_id"]: run["warnings"] for run in source_runs},
             "per_source_status": {run["source_id"]: run["status"] for run in source_runs},
+            "per_source_telemetry": per_source_telemetry,
             **dedupe_meta,
         },
     }
@@ -1726,7 +1746,8 @@ def run_workflow(run_input: RunInput) -> dict[str, Any]:
     timeline = aggregate_daily_counts(normalization["canonical_articles"])
     known_timeline = [point for point in timeline if point["day"] != "unknown"]
     unknown_timeline_count = sum(point["article_count"] for point in timeline if point["day"] == "unknown")
-    peak_day = max(timeline, key=lambda item: item["article_count"])["day"] if timeline else None
+    peak_source = known_timeline or timeline
+    peak_day = max(peak_source, key=lambda item: item["article_count"])["day"] if peak_source else None
     clustering = _build_clusters(normalization["canonical_articles"])
     citation_index = _build_citation_index(
         normalization["canonical_articles"], clustering["article_to_cluster"]

@@ -9,7 +9,8 @@
       "rss_fallback": "https://www.reddit.com/search.rss",
       "user_agent": "news-discovery-system/1.0",
       "retry_on_429": true,
-      "max_attempts": 3
+      "max_attempts": 3,
+      "fallback_on_empty": true
     },
     {
       "id": "google_news",
@@ -23,14 +24,16 @@
       "label": "Web Search (DuckDuckGo HTML)",
       "type": "web_html",
       "enabled": true,
-      "endpoint": "https://html.duckduckgo.com/html/"
+      "endpoint": "https://html.duckduckgo.com/html/",
+      "parser_mode": "regex_fallback"
     },
     {
       "id": "gdelt",
       "label": "GDELT DOC 2.0",
       "type": "public_api",
       "enabled": true,
-      "endpoint": "https://api.gdeltproject.org/api/v2/doc/doc"
+      "endpoint": "https://api.gdeltproject.org/api/v2/doc/doc",
+      "required": true
     },
     {
       "id": "hacker_news",
