@@ -73,13 +73,14 @@ Rules stay in-repo and deterministic; thresholds are explicit constants/conditio
 | Rule ID | Failure mode | Status trigger | Enforceable threshold |
 |---|---|---|---|
 | FM-013-required-gdelt-source | Required GDELT source unavailable | fail | fail if GDELT source status != success |
-| FM-014-unknown-date-peak | Timeline date integrity failure | fail | fail if peak day resolves to `unknown` |
+| FM-014-unknown-date-peak | Timeline date integrity failure | fail | fail if all canonical articles are undated |
 | FM-015-missing-event-geospatial | Invalid map semantics | fail | fail when non-trivial run has zero `event_location` entities |
 
 These rules strengthen publish safety when analyst trust would otherwise be overstated.
 
 ## Phase A date-integrity clarification
-- `unknown` publication dates are tracked explicitly and surfaced in aggregation and warnings.
-- Timeline peak evaluation prioritizes known-day buckets whenever any known-day evidence exists.
-- `FM-014-unknown-date-peak` remains a stop gate only when the peak candidates are entirely unknown-dated evidence.
+- Date status is explicit per article: `parsed`, `missing`, `parse_failed`, `fallback_derived`.
+- Undated coverage for trust gates is defined as `missing + parse_failed`.
+- Timeline defaults to successfully dated articles; undated volume is surfaced separately via aggregation telemetry.
+- `FM-014-unknown-date-peak` remains a stop gate when there are no successfully dated articles.
 - `FM-016-excessive-undated-articles` escalates when undated share is high even if a known-date peak exists.

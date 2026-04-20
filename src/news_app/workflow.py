@@ -6,6 +6,7 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
+from email.utils import parsedate_to_datetime
 import hashlib
 from pathlib import Path
 from typing import Any, Callable
@@ -240,29 +241,47 @@ def _date_to_epoch_bounds(start_date: date, end_date: date) -> tuple[int, int]:
     return int(start_dt.timestamp()), int(end_dt.timestamp())
 
 
-def _parse_date(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    candidate = value.strip()
+def _parse_date_with_diagnostics(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {"parsed": None, "format_used": None, "error": "missing_value"}
+    candidate = str(value).strip()
+    if not candidate:
+        return {"parsed": None, "format_used": None, "error": "empty_value"}
+
+    iso_candidate = candidate.replace("Z", "+00:00")
     try:
-        return datetime.fromisoformat(candidate.replace("Z", "+00:00")).astimezone(timezone.utc)
+        parsed_iso = datetime.fromisoformat(iso_candidate)
+        if parsed_iso.tzinfo is None:
+            parsed_iso = parsed_iso.replace(tzinfo=timezone.utc)
+        return {"parsed": parsed_iso.astimezone(timezone.utc), "format_used": "iso8601", "error": None}
     except ValueError:
         pass
 
+    try:
+        parsed_rfc = parsedate_to_datetime(candidate)
+        if parsed_rfc:
+            if parsed_rfc.tzinfo is None:
+                parsed_rfc = parsed_rfc.replace(tzinfo=timezone.utc)
+            return {"parsed": parsed_rfc.astimezone(timezone.utc), "format_used": "rfc2822", "error": None}
+    except (TypeError, ValueError):
+        pass
+
     formats = [
-        "%a, %d %b %Y %H:%M:%S %z",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y%m%d%H%M%S",
-        "%Y%m%dT%H%M%SZ",
-        "%Y%m%dT%H%M%S",
-        "%Y%m%d",
+        ("%Y-%m-%d %H:%M:%S", "datetime_space"),
+        ("%Y/%m/%d %H:%M:%S", "datetime_slash"),
+        ("%Y-%m-%d", "date_only_iso"),
+        ("%Y/%m/%d", "date_only_slash"),
+        ("%Y%m%d%H%M%S", "compact_datetime"),
+        ("%Y%m%dT%H%M%SZ", "compact_iso_zulu"),
+        ("%Y%m%dT%H%M%S", "compact_iso"),
+        ("%Y%m%d", "compact_date"),
     ]
-    for fmt in formats:
+    for fmt, label in formats:
         try:
             parsed = datetime.strptime(candidate, fmt)
             if parsed.tzinfo is None:
                 parsed = parsed.replace(tzinfo=timezone.utc)
-            return parsed.astimezone(timezone.utc)
+            return {"parsed": parsed.astimezone(timezone.utc), "format_used": label, "error": None}
         except ValueError:
             continue
 
@@ -272,11 +291,19 @@ def _parse_date(value: str | None) -> datetime | None:
             epoch = int(candidate)
             if len(candidate) == 13:
                 epoch = epoch // 1000
-            return datetime.fromtimestamp(epoch, tz=timezone.utc)
-        except (ValueError, OverflowError):
-            return None
+            return {
+                "parsed": datetime.fromtimestamp(epoch, tz=timezone.utc),
+                "format_used": "unix_epoch",
+                "error": None,
+            }
+        except (ValueError, OverflowError) as exc:
+            return {"parsed": None, "format_used": None, "error": f"unix_epoch_parse_error:{exc}"}
 
-    return None
+    return {"parsed": None, "format_used": None, "error": f"unrecognized_date_format:{candidate[:64]}"}
+
+
+def _parse_date(value: str | None) -> datetime | None:
+    return _parse_date_with_diagnostics(value).get("parsed")
 
 
 def _in_date_window(value: str | None, run_input: RunInput) -> bool:
@@ -1211,7 +1238,9 @@ def _build_warnings(
     timeline: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     warnings: list[dict[str, Any]] = []
-    unknown_date_count = len([article for article in canonical_articles if article.get("date_status") == "unknown"])
+    unknown_date_count = len(
+        [article for article in canonical_articles if article.get("date_status") in {"missing", "parse_failed"}]
+    )
     if unknown_date_count:
         warnings.append(
             {
@@ -1481,7 +1510,11 @@ def _build_validation_report(
     undated_count = int(normalization.get("undated_article_count", 0) or 0)
     if undated_count == 0 and normalization.get("canonical_articles"):
         undated_count = len(
-            [article for article in normalization.get("canonical_articles", []) if article.get("date_status") == "unknown"]
+            [
+                article
+                for article in normalization.get("canonical_articles", [])
+                if article.get("date_status") in {"missing", "parse_failed"}
+            ]
         )
     undated_ratio = (undated_count / valid_count) if valid_count else 0.0
     if undated_ratio >= 0.5:
@@ -1519,8 +1552,7 @@ def _build_validation_report(
         )
 
     if timeline:
-        known_timeline = [point for point in timeline if point.get("day") != "unknown"]
-        peak_candidates = known_timeline or timeline
+        peak_candidates = timeline
         peak_count = max(point.get("article_count", 0) for point in peak_candidates)
         total = sum(point.get("article_count", 0) for point in timeline)
         peak_days = [point.get("day") for point in peak_candidates if point.get("article_count", 0) == peak_count]
@@ -1535,17 +1567,17 @@ def _build_validation_report(
                 "Warning badge: spike reliability degraded.",
                 "Use peak drill-down and duplicate map before interpreting surge.",
             )
-        if "unknown" in peak_days:
-            add_event(
-                "FM-014-unknown-date-peak",
-                "fail",
-                "Timeline peak is dominated by unknown publication dates.",
-                {"peak_days": peak_days, "peak_count": peak_count},
-                "stop when peak day resolves to unknown",
-                "Critical trust gate: timeline dating integrity failed.",
-                "Review date parsing and source fields before publishing.",
-                stop_run=True,
-            )
+    elif valid_count > 0 and undated_count == valid_count:
+        add_event(
+            "FM-014-unknown-date-peak",
+            "fail",
+            "No successfully dated articles are available for timeline peak analysis.",
+            {"dated_article_count": 0, "undated_article_count": undated_count},
+            "stop when all canonical articles are undated",
+            "Critical trust gate: timeline dating integrity failed.",
+            "Review date parsing and source fields before publishing.",
+            stop_run=True,
+        )
 
     geo_entities = geospatial.get("entities", [])
     ambiguous_geo = [entity for entity in geo_entities if entity.get("ambiguity_flag")]
@@ -1822,13 +1854,22 @@ def ingest_articles(
 def normalize_articles(raw_hits: list[dict[str, Any]], source: str = "multi") -> dict[str, Any]:
     records: list[dict[str, Any]] = []
     validation_issues: list[dict[str, Any]] = []
+    date_status_counts: Counter[str] = Counter()
+    per_source_date_quality: dict[str, Counter[str]] = defaultdict(Counter)
+    fallback_date_fields = [
+        "published_day",
+        "date",
+        "date_published",
+        "created_at",
+        "pubDate",
+        "seendate",
+    ]
 
     for idx, hit in enumerate(raw_hits):
         missing = [
             field
             for field, value in {
                 "title": hit.get("title"),
-                "published_at": hit.get("published_at"),
                 "source": hit.get("source") or source,
             }.items()
             if not value
@@ -1844,34 +1885,93 @@ def normalize_articles(raw_hits: list[dict[str, Any]], source: str = "multi") ->
             )
             continue
 
-        parsed_published_at = _parse_date(hit.get("published_at"))
+        source_id = hit.get("source") or source
+        published_at_raw = hit.get("published_at")
+        date_source_field = "published_at"
+        parse_result = _parse_date_with_diagnostics(published_at_raw)
+        parsed_published_at = parse_result.get("parsed")
+        date_status = "parsed"
+        date_parse_error = parse_result.get("error")
+        date_parse_format_used = parse_result.get("format_used")
+
+        if published_at_raw is None or not str(published_at_raw).strip():
+            date_status = "missing"
+            date_parse_error = "missing_published_at"
+            parsed_published_at = None
+            date_parse_format_used = None
+
+            for candidate_field in fallback_date_fields:
+                if candidate_field not in hit:
+                    continue
+                candidate_parse = _parse_date_with_diagnostics(hit.get(candidate_field))
+                if candidate_parse.get("parsed"):
+                    parsed_published_at = candidate_parse["parsed"]
+                    date_source_field = candidate_field
+                    date_parse_format_used = candidate_parse.get("format_used")
+                    date_parse_error = None
+                    date_status = "fallback_derived"
+                    break
+                if hit.get(candidate_field):
+                    date_source_field = candidate_field
+                    date_parse_error = candidate_parse.get("error")
+        elif not parsed_published_at:
+            date_status = "parse_failed"
+
         normalized = {
             "article_id": hit.get("article_id") or f"{source}:{idx}",
             "title": hit.get("title"),
             "url": hit.get("url"),
-            "published_at": hit.get("published_at"),
+            "published_at": published_at_raw,
             "published_at_parsed": parsed_published_at.isoformat() if parsed_published_at else None,
             "published_day": parsed_published_at.date().isoformat() if parsed_published_at else "unknown",
-            "date_status": "parsed" if parsed_published_at else "unknown",
-            "source": hit.get("source") or source,
+            "date_status": date_status,
+            "date_source_field": date_source_field,
+            "date_parse_format_used": date_parse_format_used,
+            "date_parse_error": date_parse_error,
+            "source": source_id,
             "source_label": hit.get("source_label"),
             "snippet": hit.get("snippet"),
             "author": hit.get("author"),
             "source_attribution": hit.get("source_attribution")
-            or {"source_id": hit.get("source") or source, "source_label": hit.get("source_label")},
+            or {"source_id": source_id, "source_label": hit.get("source_label")},
         }
+        date_status_counts[date_status] += 1
+        per_source_date_quality[source_id]["total_articles"] += 1
+        per_source_date_quality[source_id][f"{date_status}_dates"] += 1
         records.append(normalized)
+
+    source_date_quality: dict[str, dict[str, Any]] = {}
+    for source_id, counter in per_source_date_quality.items():
+        total = int(counter.get("total_articles", 0))
+        parsed = int(counter.get("parsed_dates", 0))
+        parse_failed = int(counter.get("parse_failed_dates", 0))
+        missing = int(counter.get("missing_dates", 0))
+        fallback_derived = int(counter.get("fallback_derived_dates", 0))
+        undated = parse_failed + missing
+        source_date_quality[source_id] = {
+            "total_articles": total,
+            "parsed_dates": parsed,
+            "parse_failures": parse_failed,
+            "missing_dates": missing,
+            "fallback_derived_dates": fallback_derived,
+            "undated_articles": undated,
+            "percent_undated": round((undated / total), 3) if total else 0.0,
+        }
 
     return {
         "canonical_articles": records,
         "validation_issues": validation_issues,
         "valid_count": len(records),
         "invalid_count": len(validation_issues),
-        "undated_article_count": len([record for record in records if record.get("date_status") == "unknown"]),
+        "date_status_counts": dict(date_status_counts),
+        "undated_article_count": len(
+            [record for record in records if record.get("date_status") in {"missing", "parse_failed"}]
+        ),
+        "source_date_quality": source_date_quality,
     }
 
 
-def aggregate_daily_counts(canonical_articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def aggregate_daily_counts(canonical_articles: list[dict[str, Any]], include_undated: bool = False) -> list[dict[str, Any]]:
     counts: Counter[str] = Counter()
 
     for article in canonical_articles:
@@ -1879,6 +1979,8 @@ def aggregate_daily_counts(canonical_articles: list[dict[str, Any]]) -> list[dic
         if not day:
             parsed = _parse_date(article.get("published_at"))
             day = parsed.date().isoformat() if parsed else "unknown"
+        if day == "unknown" and not include_undated:
+            continue
         counts[day] += 1
 
     return [{"day": day, "article_count": counts[day]} for day in sorted(counts.keys())]
@@ -1894,12 +1996,10 @@ def run_workflow(run_input: RunInput, source_settings: dict[str, Any] | None = N
         ingestion = ingest_articles(run_input, source_settings=source_settings)
     normalization = normalize_articles(ingestion["raw_hits"], source="multi")
     timeline = aggregate_daily_counts(normalization["canonical_articles"])
-    known_timeline = [point for point in timeline if point["day"] != "unknown"]
-    unknown_timeline_count = sum(point["article_count"] for point in timeline if point["day"] == "unknown")
-    dated_count = sum(point["article_count"] for point in known_timeline)
+    unknown_timeline_count = normalization["undated_article_count"]
+    dated_count = sum(point["article_count"] for point in timeline)
     percent_undated = round((unknown_timeline_count / normalization["valid_count"]), 3) if normalization["valid_count"] else 0.0
-    peak_source = known_timeline or timeline
-    peak_day = max(peak_source, key=lambda item: item["article_count"])["day"] if peak_source else None
+    peak_day = max(timeline, key=lambda item: item["article_count"])["day"] if timeline else None
     clustering = _build_clusters(normalization["canonical_articles"])
     citation_index = _build_citation_index(
         normalization["canonical_articles"], clustering["article_to_cluster"]
@@ -1968,13 +2068,14 @@ def run_workflow(run_input: RunInput, source_settings: dict[str, Any] | None = N
             "aggregation": {
                 "daily_counts": timeline,
                 "total_days": len(timeline),
-                "active_days": len(known_timeline),
+                "active_days": len(timeline),
                 "dated_article_count": dated_count,
                 "undated_article_count": unknown_timeline_count,
                 "percent_undated": percent_undated,
                 "unknown_date_count": unknown_timeline_count,
-                "primary_peak_excludes_unknown": bool(known_timeline),
+                "primary_peak_excludes_unknown": True,
                 "peak_day": peak_day,
+                "source_date_quality": normalization.get("source_date_quality", {}),
                 "geospatial": {
                     "map_markers": geospatial["map_markers"],
                     "location_type_counts": location_type_counts,

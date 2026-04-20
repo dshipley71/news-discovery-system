@@ -25,8 +25,12 @@ Validate that the in-repo Gradio + Colab workflow handles analyst-critical failu
 | Source settings + required credential skip | `test_source_settings_disable_source_and_required_credentials_skip` | Disabled sources are not attempted; missing required credentials become skipped |
 | Aggregation consistency | `test_aggregation_consistency_matches_normalized_total` | Timeline total equals normalized valid count |
 | Multi-day date bucketing | `test_parse_date_buckets_multi_day_for_gdelt_format` | GDELT/compact timestamps resolve to correct day buckets |
+| RFC 2822 / RSS parsing | `test_normalization_parses_rfc2822_dates_and_derives_day` | RSS `pubDate` values parse into canonical UTC day |
+| ISO 8601 parsing | `test_normalization_parses_iso8601_dates` | ISO timestamps parse and retain correct day |
+| Date status classification | `test_normalization_distinguishes_missing_vs_parse_failed_and_fallback` | Missing and parse-failed records are distinguished; fallback-derived dates are explicit |
 | Unknown-date peak prioritization | `test_unknown_dates_do_not_override_known_peak` | Known-day peaks are used when available; unknown remains tracked |
 | Excessive undated article threshold | `test_validation_tightens_on_excessive_undated_articles` | STOP when undated share exceeds threshold |
+| Source-level date telemetry | `test_run_workflow_emits_source_level_date_quality_telemetry` | Per-source parsed/fail/missing/undated metrics are emitted |
 | Rate limiting/backoff | `test_reddit_retry_and_rss_fallback`, validation warning test | WARN with retry metadata |
 | Empty ingestion | `test_validation_stop_on_empty_ingestion` | STOP |
 | Schema drift across sources | Existing schema consistency + normalization counts | WARN/STOP by invalid ratio |
