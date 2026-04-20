@@ -916,3 +916,75 @@ def test_source_settings_ui_payload_wiring() -> None:
     assert payload["sources"]["gdelt"]["enabled"] is True
     assert payload["sources"]["gdelt"]["credential"] == ""
     assert payload["sources"]["twitter"]["credential"] == "token-123"
+
+
+def test_timeline_defaults_to_canonical_not_raw(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_input = RunInput(topic="dup spike", start_date=date(2026, 4, 1), end_date=date(2026, 4, 20))
+    monkeypatch.setattr(workflow, "ingest_articles", lambda _: {
+        "raw_hits": [
+            {"article_id": "r1", "title": "Same", "url": "https://example.com/a?utm_source=x", "published_at": "2026-04-20T01:00:00Z", "source": "google_news"},
+            {"article_id": "r2", "title": "Same", "url": "https://example.com/a?utm_source=y", "published_at": "2026-04-20T01:01:00Z", "source": "google_news"},
+            {"article_id": "r3", "title": "Same", "url": "https://example.com/a", "published_at": "2026-04-20T01:02:00Z", "source": "reddit"},
+        ],
+        "deduplicated_hits": [
+            {"article_id": "c1", "title": "Same", "url": "https://example.com/a", "published_at": "2026-04-20T01:00:00Z", "source": "google_news"}
+        ],
+        "hits_count": 1,
+        "source_runs": [{"source_id": "google_news", "status": "success", "metadata": {}, "warnings": []}],
+        "sources_attempted": ["google_news"],
+        "sources_succeeded": ["google_news"],
+        "sources_failed": [],
+        "telemetry": {"ingestion_duplicate_ratio": 0.67, "duplicate_map": [], "raw_retrieved_count": 3, "deduplicated_count": 1},
+    })
+
+    result = run_workflow(run_input)
+    day = result["stages"]["aggregation"]["daily_counts"][0]
+    assert day["canonical_count"] == 1
+    assert day["raw_retrieved_count"] == 3
+    assert day["duplicate_ratio"] == pytest.approx(2 / 3, abs=0.001)
+
+
+def test_source_day_breakdown_and_duplicate_ratio() -> None:
+    rows = workflow._build_timeline_breakdown(
+        raw_articles=[
+            {"article_id": "r1", "title": "A", "url": "https://example.com/a", "published_at": "2026-04-20T00:00:00Z", "source": "google_news"},
+            {"article_id": "r2", "title": "A", "url": "https://example.com/a?utm_source=x", "published_at": "2026-04-20T00:05:00Z", "source": "google_news"},
+            {"article_id": "r3", "title": "B", "url": "https://example.com/b", "published_at": "2026-04-20T00:10:00Z", "source": "reddit"},
+        ],
+        canonical_articles=[
+            {"article_id": "c1", "title": "A", "url": "https://example.com/a", "timeline_date_used": "2026-04-20", "source": "google_news"},
+            {"article_id": "c2", "title": "B", "url": "https://example.com/b", "timeline_date_used": "2026-04-20", "source": "reddit"},
+        ],
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["dominant_source"] == "google_news"
+    assert row["duplicate_ratio"] == pytest.approx(1 / 3, abs=0.001)
+    by_source = {item["source"]: item for item in row["source_breakdown"]}
+    assert by_source["google_news"]["duplicate_ratio"] == pytest.approx(0.5, abs=0.001)
+    assert by_source["reddit"]["duplicate_ratio"] == 0.0
+
+
+def test_timeline_date_used_prefers_publication_not_retrieval() -> None:
+    normalized = workflow.normalize_articles(
+        [
+            {
+                "article_id": "ddg:1",
+                "title": "Search result",
+                "url": "https://example.com/search",
+                "published_at": None,
+                "retrieved_at": "2026-04-20T10:00:00Z",
+                "source": "web_duckduckgo",
+            }
+        ]
+    )
+    article = normalized["canonical_articles"][0]
+    assert article["retrieved_at"] == "2026-04-20T10:00:00Z"
+    assert article["timeline_date_used"] == "unknown"
+    assert article["date_status"] == "missing"
+
+
+def test_google_news_canonicalization_unwraps_target_url() -> None:
+    google_redirect = "https://news.google.com/rss/articles/CBMiQWh0dHBzOi8vbmV3cy5leGFtcGxlLmNvbS9zdG9yeS_SAQA?oc=5&url=https%3A%2F%2Fexample.com%2Fstory%3Futm_source%3Drss"
+    canonical = workflow._canonicalize_url(google_redirect)
+    assert canonical == "https://example.com/story"

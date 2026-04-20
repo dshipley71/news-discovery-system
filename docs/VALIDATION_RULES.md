@@ -81,6 +81,6 @@ These rules strengthen publish safety when analyst trust would otherwise be over
 ## Phase A date-integrity clarification
 - Date status is explicit per article: `parsed`, `missing`, `parse_failed`, `fallback_derived`.
 - Undated coverage for trust gates is defined as `missing + parse_failed`.
-- Timeline defaults to successfully dated articles; undated volume is surfaced separately via aggregation telemetry.
+- Timeline defaults to canonical deduplicated article counts by `timeline_date_used` (publication-date semantics); raw retrieval volume and duplicate ratio are surfaced separately in aggregation diagnostics.
 - `FM-014-unknown-date-peak` remains a stop gate when there are no successfully dated articles.
 - `FM-016-excessive-undated-articles` escalates when undated share is high even if a known-date peak exists.

@@ -29,6 +29,10 @@ Validate that the in-repo Gradio + Colab workflow handles analyst-critical failu
 | ISO 8601 parsing | `test_normalization_parses_iso8601_dates` | ISO timestamps parse and retain correct day |
 | Date status classification | `test_normalization_distinguishes_missing_vs_parse_failed_and_fallback` | Missing and parse-failed records are distinguished; fallback-derived dates are explicit |
 | Unknown-date peak prioritization | `test_unknown_dates_do_not_override_known_peak` | Known-day peaks are used when available; unknown remains tracked |
+| Canonical-vs-raw timeline signal | `test_timeline_defaults_to_canonical_not_raw` | Timeline trend defaults to canonical/deduplicated volume while raw remains diagnostic |
+| Source/day duplicate inflation visibility | `test_source_day_breakdown_and_duplicate_ratio` | Day-level source driver and duplicate ratio are inspectable |
+| Timeline field semantics | `test_timeline_date_used_prefers_publication_not_retrieval` | `retrieved_at` is preserved but does not override publication timeline date |
+| Aggregator URL canonicalization | `test_google_news_canonicalization_unwraps_target_url` | Google News redirect URLs normalize to origin links for stronger dedupe |
 | Excessive undated article threshold | `test_validation_tightens_on_excessive_undated_articles` | STOP when undated share exceeds threshold |
 | Source-level date telemetry | `test_run_workflow_emits_source_level_date_quality_telemetry` | Per-source parsed/fail/missing/undated metrics are emitted |
 | Rate limiting/backoff | `test_reddit_retry_and_rss_fallback`, validation warning test | WARN with retry metadata |
@@ -73,3 +77,6 @@ Accepted when:
 - Validation stop gate for excessive undated article share.
 - Geospatial location-type separation (`event_location`/`mentioned_location`/`source_location`) and event-only mapping behavior.
 - Source settings payload wiring from Gradio controls to backend execution payload.
+- Canonical-first timeline diagnostics with raw/day/source duplicate breakdown.
+- Publication-vs-retrieval date semantics for `timeline_date_used`.
+- Google News redirect canonicalization to reduce aggregator-style duplicate inflation.

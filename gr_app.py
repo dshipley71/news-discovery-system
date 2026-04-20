@@ -129,8 +129,15 @@ def _timeline_figure(daily_counts: list[dict[str, Any]]) -> Any:
         fig.tight_layout()
         return fig
 
-    days = [point.get("day") for point in daily_counts]
-    counts = [int(point.get("article_count", 0)) for point in daily_counts]
+    safe_points = [point for point in daily_counts if point.get("day")]
+    if not safe_points:
+        ax.text(0.5, 0.5, "Timeline payload missing day values.", ha="center", va="center")
+        ax.set_title("Daily Canonical Article Counts")
+        fig.tight_layout()
+        return fig
+
+    days = [point.get("day") for point in safe_points]
+    counts = [int(point.get("canonical_count", point.get("article_count", 0)) or 0) for point in safe_points]
 
     ax.plot(days, counts, marker="o", color="#60a5fa")
     peak_count = max(counts)
@@ -145,7 +152,7 @@ def _timeline_figure(daily_counts: list[dict[str, Any]]) -> Any:
             color="#facc15",
         )
 
-    ax.set_title("Daily Article Counts")
+    ax.set_title("Daily Canonical Article Counts")
     ax.set_xlabel("Date")
     ax.set_ylabel("Articles")
     ax.grid(alpha=0.25)
@@ -165,15 +172,19 @@ def _build_timeline_summary(
     if not daily_counts:
         return "No timeline data returned; unable to identify spikes or trend direction."
 
-    total_articles = sum(int(point.get("article_count", 0)) for point in daily_counts)
+    total_articles = sum(int(point.get("canonical_count", point.get("article_count", 0)) or 0) for point in daily_counts)
+    total_raw = sum(int(point.get("raw_retrieved_count", point.get("article_count", 0)) or 0) for point in daily_counts)
     peak_candidates = [point for point in daily_counts if point.get("day") != "unknown"] if primary_peak_excludes_unknown else daily_counts
-    peak_day = max(peak_candidates, key=lambda point: int(point.get("article_count", 0)))
-    first_count = int(daily_counts[0].get("article_count", 0))
-    last_count = int(daily_counts[-1].get("article_count", 0))
+    peak_day = max(peak_candidates, key=lambda point: int(point.get("canonical_count", point.get("article_count", 0)) or 0))
+    first_count = int(daily_counts[0].get("canonical_count", daily_counts[0].get("article_count", 0)) or 0)
+    last_count = int(daily_counts[-1].get("canonical_count", daily_counts[-1].get("article_count", 0)) or 0)
     direction = "increasing" if last_count > first_count else "decreasing" if last_count < first_count else "flat"
+    dominant_source = peak_day.get("dominant_source", "unknown")
+    peak_ratio = float(peak_day.get("duplicate_ratio", 0.0) or 0.0)
     return (
-        f"{len(daily_counts)} active day(s), {total_articles} total article instances, "
-        f"peak on {peak_day.get('day')} ({peak_day.get('article_count')} articles), "
+        f"{len(daily_counts)} active day(s), {total_articles} canonical timeline articles "
+        f"({total_raw} raw retrieved for diagnostics), "
+        f"peak on {peak_day.get('day')} ({peak_day.get('canonical_count', peak_day.get('article_count', 0))} canonical articles, dominant source={dominant_source}, duplicate ratio={peak_ratio:.1%}), "
         f"dated={dated_article_count}, undated={undated_article_count} ({percent_undated:.1%}), "
         f"overall pattern appears {direction}."
     )
