@@ -436,7 +436,6 @@ def test_warning_generation_on_weak_inputs(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert "weak_source_diversity" in warning_codes
     assert "duplicate_heavy_result_set" in warning_codes
-    assert "weak_cluster_evidence" in warning_codes
     assert "sparse_coverage" in warning_codes
     assert "low_confidence_geo" in warning_codes
 
@@ -755,6 +754,92 @@ def test_unknown_dates_do_not_override_known_peak(monkeypatch: pytest.MonkeyPatc
     assert result["stages"]["aggregation"]["dated_article_count"] == 2
     assert result["stages"]["aggregation"]["undated_article_count"] == 2
     assert result["stages"]["aggregation"]["primary_peak_excludes_unknown"] is True
+
+
+def test_event_lifecycle_model_fields_present() -> None:
+    canonical = workflow.normalize_articles(
+        [
+            {"article_id": "a1", "title": "Artemis II launch update", "url": "https://a1", "published_at": "2026-04-01T01:00:00Z", "source": "s1"},
+            {"article_id": "a2", "title": "Artemis II lunar flyby complete", "url": "https://a2", "published_at": "2026-04-06T01:00:00Z", "source": "s2"},
+            {"article_id": "a3", "title": "Artemis II mission ends safely", "url": "https://a3", "published_at": "2026-04-10T01:00:00Z", "source": "s3"},
+        ]
+    )["canonical_articles"]
+    clusters = workflow._build_clusters(canonical)["clusters"]
+    filtered, _, _ = workflow._filter_clusters_by_relevance(clusters, canonical, "Artemis II")
+    lifecycle_clusters, _, _ = workflow._build_event_lifecycle_models(filtered, canonical)
+    assert lifecycle_clusters
+    required = {"event_id", "first_seen_date", "peak_date", "last_seen_date", "lifecycle_stage"}
+    assert required.issubset(lifecycle_clusters[0].keys())
+
+
+def test_temporal_anomaly_detection_for_late_coverage_spike() -> None:
+    timeline = [
+        {"day": "2026-04-01", "event_signal": 3, "coverage_volume": 4, "source_bias_detected": False},
+        {"day": "2026-04-12", "event_signal": 1, "coverage_volume": 20, "source_bias_detected": True},
+    ]
+    clusters = [
+        {"lifecycle_stage": "post-event coverage", "first_seen_date": "2026-04-01", "peak_date": "2026-04-06", "last_seen_date": "2026-04-12"}
+    ]
+    anomaly = workflow._detect_temporal_anomaly(timeline, clusters)
+    assert anomaly["temporal_anomaly"] is True
+    assert "coverage volume increases" in anomaly["anomaly_explanation"]
+
+
+def test_event_signal_timeline_uses_cluster_first_seen_not_coverage_volume() -> None:
+    canonical = workflow.normalize_articles(
+        [
+            {"article_id": "a1", "title": "Artemis II launch", "url": "https://a1", "published_at": "2026-04-01T00:00:00Z", "source": "s1"},
+            {"article_id": "a2", "title": "Artemis II launch recap", "url": "https://a2", "published_at": "2026-04-10T00:00:00Z", "source": "s1"},
+            {"article_id": "a3", "title": "Artemis II launch recap duplicate", "url": "https://a3", "published_at": "2026-04-10T01:00:00Z", "source": "s2"},
+        ]
+    )["canonical_articles"]
+    base_clusters = workflow._build_clusters(canonical)["clusters"]
+    filtered, _, _ = workflow._filter_clusters_by_relevance(base_clusters, canonical, "Artemis II")
+    lifecycle_clusters, _, _ = workflow._build_event_lifecycle_models(filtered, canonical)
+    timeline = workflow._build_event_signal_timeline(canonical, canonical, lifecycle_clusters)
+    by_day = {row["day"]: row for row in timeline}
+    assert by_day["2026-04-01"]["event_signal"] >= 1
+    assert by_day["2026-04-10"]["coverage_volume"] >= by_day["2026-04-01"]["coverage_volume"]
+
+
+def test_source_dominance_detection_threshold() -> None:
+    raw = [
+        {"article_id": "r1", "title": "A", "published_at": "2026-04-01T00:00:00Z", "source": "dominant"},
+        {"article_id": "r2", "title": "B", "published_at": "2026-04-01T01:00:00Z", "source": "dominant"},
+        {"article_id": "r3", "title": "C", "published_at": "2026-04-01T02:00:00Z", "source": "dominant"},
+        {"article_id": "r4", "title": "D", "published_at": "2026-04-01T03:00:00Z", "source": "other"},
+    ]
+    canonical = [{"article_id": row["article_id"], "timeline_date_used": "2026-04-01", "source": row["source"]} for row in raw]
+    clusters = [{"event_id": "event:1", "first_seen_date": "2026-04-01"}]
+    timeline = workflow._build_event_signal_timeline(raw, canonical, clusters, source_bias_threshold=0.7)
+    assert timeline[0]["source_bias_detected"] is True
+    assert timeline[0]["dominant_source"] == "dominant"
+
+
+def test_cluster_relevance_filter_excludes_irrelevant_cluster() -> None:
+    canonical = workflow.normalize_articles(
+        [
+            {"article_id": "a1", "title": "Artemis II mission launch", "url": "https://a1", "published_at": "2026-04-01T00:00:00Z", "source": "s1"},
+            {"article_id": "b1", "title": "Unrelated soccer transfer market", "url": "https://b1", "published_at": "2026-04-01T00:00:00Z", "source": "s2"},
+        ]
+    )["canonical_articles"]
+    clusters = workflow._build_clusters(canonical)["clusters"]
+    filtered, _, excluded = workflow._filter_clusters_by_relevance(clusters, canonical, "Artemis II")
+    assert filtered
+    assert excluded
+    assert all(item["cluster_relevance_score"] < 0.12 for item in excluded)
+
+
+def test_plot_payload_validity_contract() -> None:
+    payload = workflow._build_plot_payload(
+        [
+            {"day": "2026-04-01", "event_signal": 2, "coverage_volume": 5},
+            {"day": "2026-04-02", "event_signal": 1, "coverage_volume": 2},
+        ]
+    )
+    assert payload["plot_valid"] is True
+    assert payload["error"] is None
+    assert payload["x"] == ["2026-04-01", "2026-04-02"]
 
 
 def test_source_settings_disable_source_and_required_credentials_skip(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -39,6 +39,7 @@ Each `event` includes:
 | FM-011-silent-ui-degradation | Missing artifact contract | fail | fail if any required artifact key is absent |
 | FM-012-timeline-normalization-mismatch | Aggregation inconsistency | fail | fail if timeline total article count != normalization valid_count |
 | FM-016-excessive-undated-articles | Date integrity degradation | warn/fail | warn if undated ratio >= 0.20; fail if >= 0.50 |
+| FM-017-temporal-plausibility-anomaly | Event lifecycle mismatch | warn | warn if coverage rises while event signal is flat/declining or source bias dominates |
 
 ## Warn vs Stop policy
 - **Warn:** analyst may continue inspection, but must see issue and remediation in UI.
@@ -84,3 +85,4 @@ These rules strengthen publish safety when analyst trust would otherwise be over
 - Timeline defaults to canonical deduplicated article counts by `timeline_date_used` (publication-date semantics); raw retrieval volume and duplicate ratio are surfaced separately in aggregation diagnostics.
 - `FM-014-unknown-date-peak` remains a stop gate when there are no successfully dated articles.
 - `FM-016-excessive-undated-articles` escalates when undated share is high even if a known-date peak exists.
+- `FM-017-temporal-plausibility-anomaly` flags analyst-visible lifecycle inconsistencies (late coverage spikes, source-dominant spikes, post-event inflation).

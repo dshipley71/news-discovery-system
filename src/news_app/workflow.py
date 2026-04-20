@@ -1015,6 +1015,255 @@ def _build_clusters(canonical_articles: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _topic_tokens(topic: str) -> set[str]:
+    return set(_tokenize(topic))
+
+
+def _cluster_relevance_score(cluster: dict[str, Any], canonical_by_id: dict[str, dict[str, Any]], topic_tokens: set[str]) -> float:
+    if not topic_tokens:
+        return 1.0
+    token_pool: set[str] = set()
+    for article_id in cluster.get("article_ids", []):
+        article = canonical_by_id.get(article_id)
+        if not article:
+            continue
+        token_pool.update(_article_cluster_tokens(article))
+    return round(_token_overlap(token_pool, topic_tokens), 3)
+
+
+def _filter_clusters_by_relevance(
+    clusters: list[dict[str, Any]],
+    canonical_articles: list[dict[str, Any]],
+    topic: str,
+    threshold: float = 0.12,
+) -> tuple[list[dict[str, Any]], dict[str, str], list[dict[str, Any]]]:
+    canonical_by_id = {article.get("article_id"): article for article in canonical_articles if article.get("article_id")}
+    topic_tokens = _topic_tokens(topic)
+    filtered: list[dict[str, Any]] = []
+    article_to_cluster: dict[str, str] = {}
+    excluded_clusters: list[dict[str, Any]] = []
+
+    for cluster in clusters:
+        relevance_score = _cluster_relevance_score(cluster, canonical_by_id, topic_tokens)
+        updated_cluster = {**cluster, "cluster_relevance_score": relevance_score}
+        if relevance_score < threshold:
+            excluded_clusters.append(
+                {
+                    "cluster_id": cluster.get("cluster_id"),
+                    "cluster_label": cluster.get("cluster_label"),
+                    "cluster_relevance_score": relevance_score,
+                    "threshold": threshold,
+                    "article_count": len(cluster.get("article_ids", [])),
+                }
+            )
+            continue
+        filtered.append(updated_cluster)
+        for article_id in cluster.get("article_ids", []):
+            article_to_cluster[article_id] = cluster.get("cluster_id")
+    return filtered, article_to_cluster, excluded_clusters
+
+
+def _cluster_lifecycle_stage(first_seen: str | None, peak_day: str | None, last_seen: str | None, latest_day: str | None) -> str:
+    if not first_seen or not peak_day or not last_seen:
+        return "emerging"
+    if peak_day == latest_day:
+        return "peak"
+    if last_seen == latest_day:
+        return "post-event coverage"
+    if peak_day == first_seen:
+        return "declining"
+    return "declining"
+
+
+def _build_event_lifecycle_models(
+    clusters: list[dict[str, Any]],
+    canonical_articles: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, dict[str, Any]]]:
+    canonical_by_id = {article.get("article_id"): article for article in canonical_articles if article.get("article_id")}
+    known_days = sorted(
+        {
+            article.get("timeline_date_used")
+            for article in canonical_articles
+            if article.get("timeline_date_used") and article.get("timeline_date_used") != "unknown"
+        }
+    )
+    latest_day = known_days[-1] if known_days else None
+    enriched_clusters: list[dict[str, Any]] = []
+    article_to_event: dict[str, str] = {}
+    lifecycle_by_event: dict[str, dict[str, Any]] = {}
+
+    for cluster in clusters:
+        event_id = _stable_id("event", cluster.get("cluster_id") or "")
+        day_counts: Counter[str] = Counter()
+        for article_id in cluster.get("article_ids", []):
+            article = canonical_by_id.get(article_id)
+            if not article:
+                continue
+            day = article.get("timeline_date_used")
+            if day and day != "unknown":
+                day_counts[day] += 1
+            article_to_event[article_id] = event_id
+        if day_counts:
+            first_seen = min(day_counts.keys())
+            peak_date = max(day_counts.keys(), key=lambda day: (day_counts[day], day))
+            last_seen = max(day_counts.keys())
+        else:
+            first_seen = None
+            peak_date = None
+            last_seen = None
+        stage = _cluster_lifecycle_stage(first_seen, peak_date, last_seen, latest_day)
+        lifecycle = {
+            "event_id": event_id,
+            "first_seen_date": first_seen,
+            "peak_date": peak_date,
+            "last_seen_date": last_seen,
+            "lifecycle_stage": stage,
+            "daily_event_signal": [{"day": day, "event_signal": count} for day, count in sorted(day_counts.items())],
+        }
+        lifecycle_by_event[event_id] = lifecycle
+        enriched_clusters.append({**cluster, **lifecycle})
+    return enriched_clusters, article_to_event, lifecycle_by_event
+
+
+def _build_event_signal_timeline(
+    raw_articles: list[dict[str, Any]],
+    canonical_articles: list[dict[str, Any]],
+    clusters: list[dict[str, Any]],
+    *,
+    source_bias_threshold: float = 0.7,
+) -> list[dict[str, Any]]:
+    day_source_raw: dict[str, Counter[str]] = defaultdict(Counter)
+    day_source_canonical: dict[str, Counter[str]] = defaultdict(Counter)
+    day_event_ids: dict[str, set[str]] = defaultdict(set)
+
+    for article in raw_articles:
+        source = article.get("source") or "unknown"
+        parsed = _parse_date(article.get("published_at"))
+        day = parsed.date().isoformat() if parsed else "unknown"
+        day_source_raw[day][source] += 1
+
+    for article in canonical_articles:
+        source = article.get("source") or "unknown"
+        day = article.get("timeline_date_used") or "unknown"
+        day_source_canonical[day][source] += 1
+
+    for cluster in clusters:
+        event_id = cluster.get("event_id")
+        first_seen = cluster.get("first_seen_date")
+        if event_id and first_seen:
+            day_event_ids[first_seen].add(event_id)
+
+    all_days = sorted(
+        day
+        for day in (set(day_source_raw.keys()) | set(day_source_canonical.keys()) | set(day_event_ids.keys()))
+        if day != "unknown"
+    )
+    timeline_rows: list[dict[str, Any]] = []
+    for day in all_days:
+        source_ids = sorted(set(day_source_raw.get(day, {}).keys()) | set(day_source_canonical.get(day, {}).keys()))
+        by_source: list[dict[str, Any]] = []
+        total_raw = 0
+        total_canonical = 0
+        for source_id in source_ids:
+            raw_count = int(day_source_raw.get(day, {}).get(source_id, 0))
+            canonical_count = int(day_source_canonical.get(day, {}).get(source_id, 0))
+            total_raw += raw_count
+            total_canonical += canonical_count
+            duplicates_removed = max(0, raw_count - canonical_count)
+            duplicate_ratio = (duplicates_removed / raw_count) if raw_count else 0.0
+            by_source.append(
+                {
+                    "source": source_id,
+                    "raw_retrieved_count": raw_count,
+                    "canonical_count": canonical_count,
+                    "duplicates_removed": duplicates_removed,
+                    "duplicate_ratio": round(duplicate_ratio, 3),
+                }
+            )
+        duplicates_removed_total = max(0, total_raw - total_canonical)
+        duplicate_ratio_total = (duplicates_removed_total / total_raw) if total_raw else 0.0
+        dominant = max(by_source, key=lambda row: row["canonical_count"]) if by_source else {"source": "unknown", "canonical_count": 0}
+        dominance_ratio = (dominant["canonical_count"] / total_canonical) if total_canonical else 0.0
+        source_bias_detected = dominance_ratio > source_bias_threshold
+        timeline_rows.append(
+            {
+                "day": day,
+                "event_signal": len(day_event_ids.get(day, set())),
+                "coverage_volume": total_canonical,
+                "article_count": total_canonical,
+                "canonical_count": total_canonical,
+                "raw_retrieved_count": total_raw,
+                "duplicates_removed": duplicates_removed_total,
+                "duplicate_ratio": round(duplicate_ratio_total, 3),
+                "source_contribution_by_day": by_source,
+                "source_breakdown": by_source,
+                "dominant_source": dominant["source"],
+                "dominance_ratio": round(dominance_ratio, 3),
+                "source_bias_detected": source_bias_detected,
+            }
+        )
+    return timeline_rows
+
+
+def _detect_temporal_anomaly(timeline: list[dict[str, Any]], clusters: list[dict[str, Any]]) -> dict[str, Any]:
+    if not timeline:
+        return {"temporal_anomaly": False, "anomaly_explanation": "No timeline points available."}
+    event_signal_series = [int(point.get("event_signal", 0) or 0) for point in timeline]
+    coverage_series = [int(point.get("coverage_volume", point.get("canonical_count", 0)) or 0) for point in timeline]
+    peak_idx = max(range(len(event_signal_series)), key=lambda idx: event_signal_series[idx])
+    peak_day = timeline[peak_idx]["day"]
+    increasing_after_completion = False
+    post_event_clusters = [cluster for cluster in clusters if cluster.get("lifecycle_stage") == "post-event coverage"]
+    for cluster in post_event_clusters:
+        first_seen = cluster.get("first_seen_date")
+        peak_date = cluster.get("peak_date")
+        last_seen = cluster.get("last_seen_date")
+        if first_seen and peak_date and last_seen and peak_date < last_seen and first_seen < peak_date:
+            increasing_after_completion = True
+            break
+    source_bias_days = [point["day"] for point in timeline if point.get("source_bias_detected")]
+    late_coverage_spike = False
+    if len(coverage_series) >= 2 and coverage_series[-1] > coverage_series[0] and event_signal_series[-1] <= event_signal_series[0]:
+        late_coverage_spike = True
+
+    temporal_anomaly = increasing_after_completion or late_coverage_spike or bool(source_bias_days)
+    reasons: list[str] = []
+    if increasing_after_completion:
+        reasons.append("increasing trend after event completion in one or more event lifecycles")
+    if late_coverage_spike:
+        reasons.append("coverage volume increases while event signal is flat/declining")
+    if source_bias_days:
+        reasons.append(f"source dominance detected on {', '.join(source_bias_days)}")
+    if peak_idx > 0 and peak_idx == len(timeline) - 1 and event_signal_series[-1] > 0:
+        reasons.append("peak appears at end of window; confirm event timing window")
+        temporal_anomaly = True
+    explanation = "; ".join(reasons) if reasons else f"No temporal anomaly detected. Peak event signal day={peak_day}."
+    return {"temporal_anomaly": temporal_anomaly, "anomaly_explanation": explanation, "peak_event_signal_day": peak_day}
+
+
+def _build_plot_payload(timeline: list[dict[str, Any]]) -> dict[str, Any]:
+    points = [point for point in timeline if point.get("day")]
+    x = [str(point.get("day")) for point in points]
+    event_signal = [int(point.get("event_signal", 0) or 0) for point in points]
+    coverage_volume = [int(point.get("coverage_volume", point.get("canonical_count", 0)) or 0) for point in points]
+    valid = bool(x) and len(x) == len(event_signal) == len(coverage_volume)
+    if not valid:
+        return {
+            "plot_valid": False,
+            "error": "timeline_plot_payload_invalid_or_empty",
+            "x": x,
+            "event_signal": event_signal,
+            "coverage_volume": coverage_volume,
+        }
+    return {
+        "plot_valid": True,
+        "error": None,
+        "x": x,
+        "event_signal": event_signal,
+        "coverage_volume": coverage_volume,
+    }
+
+
 def _claim_classification(article: dict[str, Any]) -> str:
     if article.get("claim_classification") in {"supported", "inferred", "speculative"}:
         return article["claim_classification"]
@@ -1335,6 +1584,35 @@ def _build_warnings(
                 "metrics": {"article_count": len(canonical_articles), "active_days": len(timeline)},
             }
         )
+    biased_days = [point.get("day") for point in timeline if point.get("source_bias_detected")]
+    if biased_days:
+        warnings.append(
+            {
+                "warning_code": "source_bias_detected",
+                "severity": "warn",
+                "message": "Single-source dominance detected on one or more timeline days.",
+                "metrics": {"biased_days": biased_days, "day_count": len(biased_days)},
+            }
+        )
+    if len(timeline) >= 2:
+        first_signal = int(timeline[0].get("event_signal", 0) or 0)
+        last_signal = int(timeline[-1].get("event_signal", 0) or 0)
+        first_coverage = int(timeline[0].get("coverage_volume", timeline[0].get("article_count", 0)) or 0)
+        last_coverage = int(timeline[-1].get("coverage_volume", timeline[-1].get("article_count", 0)) or 0)
+        if last_coverage > first_coverage and last_signal <= first_signal:
+            warnings.append(
+                {
+                    "warning_code": "temporal_anomaly",
+                    "severity": "warn",
+                    "message": "Coverage rises while event signal remains flat/declines.",
+                    "metrics": {
+                        "event_signal_first": first_signal,
+                        "event_signal_last": last_signal,
+                        "coverage_first": first_coverage,
+                        "coverage_last": last_coverage,
+                    },
+                }
+            )
     speculative = citation_index.get("claim_classification_counts", {}).get("speculative", 0)
     if citation_index.get("citation_count", 0) and speculative / citation_index["citation_count"] > 0.4:
         warnings.append(
@@ -1589,6 +1867,28 @@ def _build_validation_report(
                 "warn if peak_ratio >= 0.70 and duplicate_ratio >= 0.35",
                 "Warning badge: spike reliability degraded.",
                 "Use peak drill-down and duplicate map before interpreting surge.",
+            )
+
+        event_first = int(timeline[0].get("event_signal", 0) or 0)
+        event_last = int(timeline[-1].get("event_signal", 0) or 0)
+        coverage_first = int(timeline[0].get("coverage_volume", timeline[0].get("article_count", 0)) or 0)
+        coverage_last = int(timeline[-1].get("coverage_volume", timeline[-1].get("article_count", 0)) or 0)
+        source_bias_days = [point.get("day") for point in timeline if point.get("source_bias_detected")]
+        if (coverage_last > coverage_first and event_last <= event_first) or source_bias_days:
+            add_event(
+                "FM-017-temporal-plausibility-anomaly",
+                "warn",
+                "Coverage trend is temporally implausible for event lifecycle progression.",
+                {
+                    "event_signal_first": event_first,
+                    "event_signal_last": event_last,
+                    "coverage_first": coverage_first,
+                    "coverage_last": coverage_last,
+                    "source_bias_days": source_bias_days,
+                },
+                "warn if coverage rises while event signal is flat/declining or source bias dominates peak days",
+                "Warning badge: temporal anomaly detected.",
+                "Interpret timeline using event signal and inspect source-contribution diagnostics.",
             )
     elif valid_count > 0 and undated_count == valid_count:
         add_event(
@@ -2114,48 +2414,69 @@ def run_workflow(run_input: RunInput, source_settings: dict[str, Any] | None = N
     unknown_timeline_count = normalization["undated_article_count"]
     dated_count = sum(point["article_count"] for point in timeline)
     percent_undated = round((unknown_timeline_count / normalization["valid_count"]), 3) if normalization["valid_count"] else 0.0
-    peak_day = max(timeline, key=lambda item: item["article_count"])["day"] if timeline else None
     clustering = _build_clusters(normalization["canonical_articles"])
-    cluster_timeline = _aggregate_cluster_daily_counts(clustering["clusters"], normalization["canonical_articles"])
+    filtered_clusters, filtered_article_to_cluster, excluded_clusters = _filter_clusters_by_relevance(
+        clustering["clusters"],
+        normalization["canonical_articles"],
+        run_input.topic,
+    )
+    lifecycle_clusters, article_to_event, lifecycle_by_event = _build_event_lifecycle_models(
+        filtered_clusters,
+        normalization["canonical_articles"],
+    )
+    cluster_timeline = _aggregate_cluster_daily_counts(lifecycle_clusters, normalization["canonical_articles"])
+    event_signal_timeline = _build_event_signal_timeline(
+        ingestion.get("raw_hits", []),
+        normalization["canonical_articles"],
+        lifecycle_clusters,
+    )
+    temporal_check = _detect_temporal_anomaly(event_signal_timeline, lifecycle_clusters)
+    plot_payload = _build_plot_payload(event_signal_timeline)
+    peak_day = (
+        max(event_signal_timeline, key=lambda item: int(item.get("event_signal", 0) or 0)).get("day")
+        if event_signal_timeline
+        else None
+    )
     citation_index = _build_citation_index(
-        normalization["canonical_articles"], clustering["article_to_cluster"]
+        normalization["canonical_articles"], filtered_article_to_cluster
     )
     geospatial = _extract_geospatial_entities(normalization["canonical_articles"])
     location_type_counts = dict(
         Counter(entity.get("location_type") or "unknown" for entity in geospatial.get("entities", []))
     )
     evidence_bundles = _build_evidence_bundles(
-        clustering["clusters"],
-        timeline,
+        lifecycle_clusters,
+        event_signal_timeline,
         normalization["canonical_articles"],
         citation_index["citations"],
         geospatial["map_markers"],
     )
     warnings = _build_warnings(
         canonical_articles=normalization["canonical_articles"],
-        clusters=clustering["clusters"],
+        clusters=lifecycle_clusters,
         duplicate_ratio=ingestion["telemetry"]["ingestion_duplicate_ratio"],
         geospatial_entities=geospatial["entities"],
         citation_index=citation_index,
-        timeline=timeline,
+        timeline=event_signal_timeline,
     )
     artifacts = {
         "deduplicated_article_set": normalization["canonical_articles"],
         "canonical_lineage_duplicate_map": ingestion["telemetry"].get("duplicate_map", []),
-        "cluster_artifact": clustering["clusters"],
+        "cluster_artifact": lifecycle_clusters,
         "citation_index": citation_index,
         "evidence_bundles": evidence_bundles,
         "geospatial_entities_markers": geospatial,
         "analyst_warnings": warnings,
+        "event_lifecycle_index": lifecycle_by_event,
     }
     validation = _build_validation_report(
         ingestion=ingestion,
         normalization=normalization,
-        clustering=clustering,
+        clustering={"clusters": lifecycle_clusters, "article_to_cluster": filtered_article_to_cluster},
         geospatial=geospatial,
         citation_index=citation_index,
         evidence_bundles=evidence_bundles,
-        timeline=timeline,
+        timeline=event_signal_timeline,
         warnings=warnings,
         artifacts=artifacts,
     )
@@ -2172,9 +2493,11 @@ def run_workflow(run_input: RunInput, source_settings: dict[str, Any] | None = N
             "ingestion": ingestion,
             "normalization": normalization,
             "clustering": {
-                "clusters": clustering["clusters"],
-                "cluster_count": len(clustering["clusters"]),
-                "article_to_cluster": clustering["article_to_cluster"],
+                "clusters": lifecycle_clusters,
+                "cluster_count": len(lifecycle_clusters),
+                "article_to_cluster": filtered_article_to_cluster,
+                "article_to_event": article_to_event,
+                "excluded_clusters": excluded_clusters,
             },
             "citation_traceability": citation_index,
             "evidence": evidence_bundles,
@@ -2182,11 +2505,13 @@ def run_workflow(run_input: RunInput, source_settings: dict[str, Any] | None = N
             "warnings": warnings,
             "validation": validation,
             "aggregation": {
-                "daily_counts": timeline,
+                "daily_counts": event_signal_timeline,
+                "event_signal_timeline": event_signal_timeline,
+                "coverage_timeline_diagnostics": timeline,
                 "daily_cluster_counts": cluster_timeline,
-                "timeline_signal_default": "canonical_count",
-                "total_days": len(timeline),
-                "active_days": len(timeline),
+                "timeline_signal_default": "event_signal",
+                "total_days": len(event_signal_timeline),
+                "active_days": len(event_signal_timeline),
                 "dated_article_count": dated_count,
                 "undated_article_count": unknown_timeline_count,
                 "percent_undated": percent_undated,
@@ -2195,8 +2520,14 @@ def run_workflow(run_input: RunInput, source_settings: dict[str, Any] | None = N
                 "peak_day": peak_day,
                 "raw_retrieved_count": ingestion.get("telemetry", {}).get("raw_retrieved_count", 0),
                 "deduplicated_count": ingestion.get("telemetry", {}).get("deduplicated_count", 0),
-                "cluster_count": len(clustering["clusters"]),
+                "cluster_count": len(lifecycle_clusters),
                 "source_date_quality": normalization.get("source_date_quality", {}),
+                "event_signal_total": sum(int(point.get("event_signal", 0) or 0) for point in event_signal_timeline),
+                "coverage_volume_total": sum(int(point.get("coverage_volume", 0) or 0) for point in event_signal_timeline),
+                "temporal_anomaly": temporal_check["temporal_anomaly"],
+                "temporal_anomaly_explanation": temporal_check["anomaly_explanation"],
+                "peak_event_signal_day": temporal_check.get("peak_event_signal_day"),
+                "timeline_plot_payload": plot_payload,
                 "geospatial": {
                     "map_markers": geospatial["map_markers"],
                     "location_type_counts": location_type_counts,

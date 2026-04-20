@@ -38,8 +38,14 @@ Define first-class backend artifacts emitted by `run_workflow` in `src/news_app/
      - `article_ids`
      - `source_diversity`
      - `cluster_confidence`
+     - `cluster_relevance_score`
      - `temporal_span.start`
      - `temporal_span.end`
+     - `event_id`
+     - `first_seen_date`
+     - `peak_date`
+     - `last_seen_date`
+     - `lifecycle_stage`
      - `heuristic`
 
 4. **Citation index**
@@ -74,6 +80,17 @@ Define first-class backend artifacts emitted by `run_workflow` in `src/news_app/
      - `weak_cluster_evidence`
      - `sparse_coverage`
      - `speculative_interpretation_risk`
+     - `temporal_anomaly`
+     - `source_bias_detected`
+
+8. **Event lifecycle index**
+   - Path: `artifacts.event_lifecycle_index`
+   - Keyed by `event_id`, includes:
+     - `first_seen_date`
+     - `peak_date`
+     - `last_seen_date`
+     - `lifecycle_stage`
+     - `daily_event_signal[]`
 
 ## Dashboard Consumption Contract (Current)
 The Gradio dashboard reads artifacts directly with these mappings:
@@ -81,9 +98,12 @@ The Gradio dashboard reads artifacts directly with these mappings:
 - **Run summary totals/warnings**
   - `stages.ingestion`, `stages.normalization`, `stages.warnings`
 - **Timeline panel**
-  - `stages.aggregation.daily_counts`
-  - default signal in each row is canonical (`article_count` / `canonical_count`)
+  - `stages.aggregation.event_signal_timeline` (also mirrored in `daily_counts` for compatibility)
+  - default signal is `event_signal`
+  - diagnostic signal is `coverage_volume`
   - diagnostics include `raw_retrieved_count`, `duplicate_ratio`, and `source_breakdown[]`
+  - source dominance diagnostics include `dominant_source`, `dominance_ratio`, and `source_bias_detected`
+  - temporal plausibility diagnostics include `temporal_anomaly`, `temporal_anomaly_explanation`
   - cluster timeline diagnostics in `stages.aggregation.daily_cluster_counts`
   - `stages.aggregation.source_date_quality`
   - `artifacts.evidence_bundles.peak_to_clusters_articles`

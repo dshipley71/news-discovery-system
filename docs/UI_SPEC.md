@@ -44,7 +44,8 @@ Warning sources:
 
 ### 1.3 Timeline Panel
 Contains:
-- daily canonical article count plot from `stages.aggregation.daily_counts`
+- default event-signal plot from `stages.aggregation.event_signal_timeline`
+- overlay of `coverage_volume` for diagnostic comparison
 - peak annotations when available
 - trend summary text
 - explicit drill-down table from `artifacts.evidence_bundles.peak_to_clusters_articles`
@@ -53,7 +54,12 @@ Contains:
   - `raw_retrieved_count`
   - `duplicate_ratio`
   - `dominant_source`
+  - `dominance_ratio`
+  - `source_bias_detected`
   - `source_breakdown[]`
+- temporal plausibility visibility:
+  - `stages.aggregation.temporal_anomaly`
+  - `stages.aggregation.temporal_anomaly_explanation`
 - dated/undated integrity summary:
   - dated article count
   - undated article count
@@ -68,6 +74,7 @@ Date semantics in timeline payload:
 
 Drill-down path:
 - `peak day -> clusters -> article IDs`
+- Event lifecycle metadata (`event_id`, `first_seen_date`, `peak_date`, `last_seen_date`, `lifecycle_stage`) must be inspectable in cluster detail.
 
 ### 1.4 Geospatial Map Panel
 Contains:

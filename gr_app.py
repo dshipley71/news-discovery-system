@@ -137,9 +137,11 @@ def _timeline_figure(daily_counts: list[dict[str, Any]]) -> Any:
         return fig
 
     days = [point.get("day") for point in safe_points]
-    counts = [int(point.get("canonical_count", point.get("article_count", 0)) or 0) for point in safe_points]
+    counts = [int(point.get("event_signal", point.get("canonical_count", point.get("article_count", 0))) or 0) for point in safe_points]
+    coverage = [int(point.get("coverage_volume", point.get("canonical_count", point.get("article_count", 0))) or 0) for point in safe_points]
 
     ax.plot(days, counts, marker="o", color="#60a5fa")
+    ax.plot(days, coverage, marker="s", linestyle="--", color="#f59e0b", alpha=0.75)
     peak_count = max(counts)
     peak_indexes = [idx for idx, count in enumerate(counts) if count == peak_count]
     for idx in peak_indexes:
@@ -152,9 +154,10 @@ def _timeline_figure(daily_counts: list[dict[str, Any]]) -> Any:
             color="#facc15",
         )
 
-    ax.set_title("Daily Canonical Article Counts")
+    ax.set_title("Event Signal Timeline (default) vs Coverage Volume")
     ax.set_xlabel("Date")
-    ax.set_ylabel("Articles")
+    ax.set_ylabel("Count")
+    ax.legend(["event_signal", "coverage_volume"])
     ax.grid(alpha=0.25)
     ax.tick_params(axis="x", rotation=45)
     fig.tight_layout()
@@ -172,26 +175,35 @@ def _build_timeline_summary(
     if not daily_counts:
         return "No timeline data returned; unable to identify spikes or trend direction."
 
-    total_articles = sum(int(point.get("canonical_count", point.get("article_count", 0)) or 0) for point in daily_counts)
+    total_event_signal = sum(int(point.get("event_signal", point.get("canonical_count", point.get("article_count", 0))) or 0) for point in daily_counts)
+    total_coverage = sum(int(point.get("coverage_volume", point.get("canonical_count", point.get("article_count", 0))) or 0) for point in daily_counts)
     total_raw = sum(int(point.get("raw_retrieved_count", point.get("article_count", 0)) or 0) for point in daily_counts)
     peak_candidates = [point for point in daily_counts if point.get("day") != "unknown"] if primary_peak_excludes_unknown else daily_counts
-    peak_day = max(peak_candidates, key=lambda point: int(point.get("canonical_count", point.get("article_count", 0)) or 0))
-    first_count = int(daily_counts[0].get("canonical_count", daily_counts[0].get("article_count", 0)) or 0)
-    last_count = int(daily_counts[-1].get("canonical_count", daily_counts[-1].get("article_count", 0)) or 0)
+    peak_day = max(peak_candidates, key=lambda point: int(point.get("event_signal", point.get("canonical_count", point.get("article_count", 0))) or 0))
+    first_count = int(daily_counts[0].get("event_signal", daily_counts[0].get("canonical_count", daily_counts[0].get("article_count", 0))) or 0)
+    last_count = int(daily_counts[-1].get("event_signal", daily_counts[-1].get("canonical_count", daily_counts[-1].get("article_count", 0))) or 0)
     direction = "increasing" if last_count > first_count else "decreasing" if last_count < first_count else "flat"
     dominant_source = peak_day.get("dominant_source", "unknown")
     peak_ratio = float(peak_day.get("duplicate_ratio", 0.0) or 0.0)
+    anomaly = bool(peak_day.get("source_bias_detected")) or any(bool(point.get("source_bias_detected")) for point in daily_counts)
     return (
-        f"{len(daily_counts)} active day(s), {total_articles} canonical timeline articles "
+        f"{len(daily_counts)} active day(s), {total_event_signal} event-signal units (default) / {total_coverage} coverage-volume units, "
         f"({total_raw} raw retrieved for diagnostics), "
-        f"peak on {peak_day.get('day')} ({peak_day.get('canonical_count', peak_day.get('article_count', 0))} canonical articles, dominant source={dominant_source}, duplicate ratio={peak_ratio:.1%}), "
+        f"peak on {peak_day.get('day')} ({peak_day.get('event_signal', peak_day.get('canonical_count', peak_day.get('article_count', 0)))} event signal, dominant source={dominant_source}, duplicate ratio={peak_ratio:.1%}), "
         f"dated={dated_article_count}, undated={undated_article_count} ({percent_undated:.1%}), "
-        f"overall pattern appears {direction}."
+        f"overall event-signal pattern appears {direction}; temporal anomaly flag={'true' if anomaly else 'false'}."
     )
 
 
 def _build_map_plot(map_rows: list[dict[str, Any]]) -> go.Figure:
-    if not map_rows:
+    safe_rows = [
+        row
+        for row in map_rows
+        if row.get("location_label") is not None
+        and row.get("latitude") is not None
+        and row.get("longitude") is not None
+    ]
+    if not safe_rows:
         fig = go.Figure()
         fig.add_annotation(
             text="No geospatial output returned for this run.",
@@ -213,13 +225,13 @@ def _build_map_plot(map_rows: list[dict[str, Any]]) -> go.Figure:
         return fig
 
     frame = {
-        "location_label": [row["location_label"] for row in map_rows],
-        "latitude": [row["latitude"] for row in map_rows],
-        "longitude": [row["longitude"] for row in map_rows],
-        "article_count": [row["article_count"] for row in map_rows],
-        "intensity": [row["intensity"] for row in map_rows],
-        "avg_confidence": [row["avg_confidence"] for row in map_rows],
-        "ambiguous_locations": [row["ambiguous_locations"] for row in map_rows],
+        "location_label": [row["location_label"] for row in safe_rows],
+        "latitude": [row["latitude"] for row in safe_rows],
+        "longitude": [row["longitude"] for row in safe_rows],
+        "article_count": [row["article_count"] for row in safe_rows],
+        "intensity": [row["intensity"] for row in safe_rows],
+        "avg_confidence": [row["avg_confidence"] for row in safe_rows],
+        "ambiguous_locations": [row["ambiguous_locations"] for row in safe_rows],
     }
 
     fig = px.scatter_geo(
@@ -590,6 +602,9 @@ def _build_run_summary(
         )
 
     warning_text = "\n".join([f"- {line}" for line in warning_lines]) if warning_lines else "- No warnings."
+    temporal_anomaly_text = (
+        f"- **Temporal anomaly:** `{aggregation.get('temporal_anomaly', False)}` — {aggregation.get('temporal_anomaly_explanation', 'n/a')}\n"
+    )
     return (
         f"### Run Summary & Warnings\n"
         f"- **Status:** Completed\n"
@@ -605,6 +620,7 @@ def _build_run_summary(
         f"- **Cluster totals:** `{len(cluster_rows)}`\n"
         f"- **Geospatial totals:** `{len(map_rows)}` map markers\n"
         f"- **Timeline trend:** {timeline_summary}\n\n"
+        f"{temporal_anomaly_text}\n"
         f"### Analyst Warnings / Partial Failures\n{warning_text}"
     )
 
