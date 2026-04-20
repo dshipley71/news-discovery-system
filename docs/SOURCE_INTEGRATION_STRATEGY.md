@@ -98,3 +98,18 @@ This reduces cross-source duplicate inflation while preserving conservative, aud
 - GDELT adapter now records request telemetry (`http_status`, `response_bytes`, request parameters, `error_details`) and distinguishes `failed` vs `success with empty result`.
 - GDELT supports optional API key through `GDELT_API_KEY` (or source config `api_key`) while remaining functional without keys.
 - Per-source hard cap defaults were raised and centralized; ingestion no longer enforces the prior low fixed cap.
+
+## Phase A stabilization contract (implemented)
+- Date integrity is now handled as a first-class ingestion/aggregation concern:
+  - unknown dates are retained and counted, but known-day peaks are prioritized when present.
+  - unknown-date volume remains visible via aggregation metrics and warnings.
+- GDELT telemetry now exposes `result_state` as `failed | empty | partial | full` to distinguish transport failure from no-match and partial-return scenarios.
+- DuckDuckGo HTML ingestion now resolves max record limits correctly and still applies regex fallback extraction patterns.
+- Reddit fallback remains mandatory for both JSON failure and JSON empty-result paths.
+- Per-source telemetry now includes:
+  - `attempted`
+  - `succeeded`
+  - `failed`
+  - `skipped`
+  - `article_count`
+  - `fallback_used`

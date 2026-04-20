@@ -76,3 +76,8 @@ Rules stay in-repo and deterministic; thresholds are explicit constants/conditio
 | FM-015-missing-event-geospatial | Invalid map semantics | fail | fail when non-trivial run has zero `event_location` entities |
 
 These rules strengthen publish safety when analyst trust would otherwise be overstated.
+
+## Phase A date-integrity clarification
+- `unknown` publication dates are tracked explicitly and surfaced in aggregation and warnings.
+- Timeline peak evaluation prioritizes known-day buckets whenever any known-day evidence exists.
+- `FM-014-unknown-date-peak` remains a stop gate only when the peak candidates are entirely unknown-dated evidence.

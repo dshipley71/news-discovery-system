@@ -144,9 +144,14 @@ This repository intentionally keeps controls lightweight and in-repo. No externa
 
 ### FM-014 Unknown-date peak
 - **Description:** Timeline peak on `unknown` can mislead temporal conclusions.
-- **Detection rule:** STOP when highest-volume timeline bucket is `unknown`.
+- **Detection rule:** STOP when peak candidates resolve to `unknown` (i.e., no known-day bucket can establish the peak).
 - **Analyst-visible signal:** Validation failure includes `peak_days` and `peak_count`.
 - **Fallback behavior:** Require date parsing correction before publication.
+
+### Phase A source telemetry hardening
+- Per-source runtime telemetry must provide `attempted/succeeded/failed/skipped/article_count/fallback_used`.
+- `skipped` is distinct from `failed`; token-gated sources (for example X/Twitter) should not be counted as transport failures when credentials are absent.
+- GDELT telemetry includes explicit result mode: `failed`, `empty`, `partial`, or `full`.
 
 ### FM-015 Missing event-location geospatial output
 - **Description:** Map cannot be trusted when only source/publisher locations exist.

@@ -70,6 +70,9 @@ def test_multiple_source_merge_behavior(monkeypatch: pytest.MonkeyPatch) -> None
         "reddit": "success",
         "google_news": "success",
     }
+    assert ingestion["telemetry"]["per_source_telemetry"]["reddit"]["attempted"] is True
+    assert ingestion["telemetry"]["per_source_telemetry"]["reddit"]["succeeded"] is True
+    assert ingestion["telemetry"]["per_source_telemetry"]["reddit"]["fallback_used"] is False
 
 
 def test_partial_source_failure_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -563,9 +566,11 @@ def test_source_failure_reporting_distinguishes_skipped_and_empty(monkeypatch: p
 
     ingestion = ingest_articles(run_input)
 
-    assert "twitter" in ingestion["sources_failed"]
+    assert "twitter" not in ingestion["sources_failed"]
     assert ingestion["sources_skipped"] == ["twitter"]
     assert ingestion["sources_empty"] == ["reddit"]
+    assert ingestion["telemetry"]["per_source_telemetry"]["twitter"]["skipped"] is True
+    assert ingestion["telemetry"]["per_source_telemetry"]["twitter"]["failed"] is False
 
 
 def test_cluster_distribution_groups_related_articles() -> None:
@@ -678,6 +683,7 @@ def test_gdelt_transparent_failure_and_success(monkeypatch: pytest.MonkeyPatch) 
     )
     assert failed.status == "failed"
     assert failed.metadata["http_status"] == 503
+    assert failed.metadata["result_state"] == "failed"
     assert failed.error
 
     class SuccessSession:
@@ -696,6 +702,7 @@ def test_gdelt_transparent_failure_and_success(monkeypatch: pytest.MonkeyPatch) 
     assert success.status == "success"
     assert len(success.articles) == 1
     assert success.metadata["http_status"] == 200
+    assert success.metadata["result_state"] == "partial"
 
 
 def test_validation_stops_on_unknown_peak_and_required_gdelt_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -716,3 +723,23 @@ def test_validation_stops_on_unknown_peak_and_required_gdelt_failure(monkeypatch
     failed_rules = {event["rule_id"] for event in result["stages"]["validation"]["events"] if event["status"] == "fail"}
     assert "FM-013-required-gdelt-source" in failed_rules
     assert "FM-014-unknown-date-peak" in failed_rules
+
+
+def test_unknown_dates_do_not_override_known_peak(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_input = RunInput(topic="integrity", start_date=date(2026, 4, 1), end_date=date(2026, 4, 17))
+    monkeypatch.setattr(workflow, "ingest_articles", lambda _: {
+        "raw_hits": [
+            {"article_id": "a1", "title": "A", "url": "https://x1", "published_at": "2026-04-10T01:00:00Z", "source": "reddit"},
+            {"article_id": "a2", "title": "B", "url": "https://x2", "published_at": "2026-04-10T02:00:00Z", "source": "reddit"},
+            {"article_id": "a3", "title": "C", "url": "https://x3", "published_at": "bad-date", "source": "reddit"},
+            {"article_id": "a4", "title": "D", "url": "https://x4", "published_at": "also-bad", "source": "reddit"},
+        ],
+        "hits_count": 4,
+        "source_runs": [{"source_id": "reddit", "status": "success", "metadata": {}, "warnings": []}],
+        "sources_attempted": ["reddit"],
+        "sources_succeeded": ["reddit"],
+        "sources_failed": [],
+        "telemetry": {"ingestion_duplicate_ratio": 0.0, "duplicate_map": []},
+    })
+    result = run_workflow(run_input)
+    assert result["stages"]["aggregation"]["peak_day"] == "2026-04-10"
