@@ -127,6 +127,18 @@ Accordion provides inspectable payloads:
 - geospatial payload
 - warning payload
 
+### 1.8 Run Review Log Export Panel
+Accordion: **Run Review Log Export (ChatGPT-ready)**.
+
+Contains:
+- markdown review summary (`stages.review_log_markdown` with artifact fallback),
+- JSON review log (`stages.review_log` with artifact fallback).
+
+Requirements:
+- generated on every run (success or partial source failure),
+- copyable without requiring CLI access,
+- includes query metadata, source outcomes, date integrity, timeline summary, cluster summary, geospatial summary, validation/warnings, and analyst review note.
+
 ## 2) Missing/Partial Artifact Handling
 Dashboard must not fail silently. Explicit warnings are rendered for:
 - empty ingestion
