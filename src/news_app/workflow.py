@@ -158,11 +158,80 @@ def _canonicalize_url(url: str | None) -> str:
     return urlunparse(canonical).rstrip("/")
 
 
-def _load_source_configs() -> list[dict[str, Any]]:
+def _load_all_source_configs() -> list[dict[str, Any]]:
     config_path = Path(__file__).resolve().parents[2] / "config" / "sources.json"
     with config_path.open("r", encoding="utf-8") as f:
         data = json.load(f)
-    return [source for source in data.get("sources", []) if source.get("enabled", True)]
+    return data.get("sources", [])
+
+
+def _load_source_configs() -> list[dict[str, Any]]:
+    return [source for source in _load_all_source_configs() if source.get("enabled", True)]
+
+
+def _resolve_source_settings(
+    source_configs: list[dict[str, Any]],
+    source_settings: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not source_settings:
+        return source_configs
+
+    source_settings_by_id = source_settings.get("sources") if isinstance(source_settings, dict) else None
+    if not isinstance(source_settings_by_id, dict):
+        return source_configs
+
+    resolved: list[dict[str, Any]] = []
+    for source in source_configs:
+        source_copy = dict(source)
+        override = source_settings_by_id.get(source["id"])
+        if isinstance(override, dict):
+            if "enabled" in override:
+                source_copy["enabled"] = bool(override["enabled"])
+            if "credential" in override:
+                source_copy["credential_override"] = str(override.get("credential") or "")
+        resolved.append(source_copy)
+    return resolved
+
+
+def _resolve_source_credential(source: dict[str, Any]) -> tuple[str, bool]:
+    override = str(source.get("credential_override") or "").strip()
+    if override:
+        return override, True
+
+    env_name = source.get("credential_env") or source.get("required_env")
+    if env_name:
+        env_value = os.getenv(str(env_name), "").strip()
+        if env_value:
+            return env_value, False
+
+    config_key = str(source.get("api_key") or "").strip()
+    if config_key:
+        return config_key, False
+    return "", False
+
+
+def get_source_settings_model() -> list[dict[str, Any]]:
+    model: list[dict[str, Any]] = []
+    for source in _load_all_source_configs():
+        auth_mode = source.get("auth_mode", "no_key")
+        credential_env = source.get("credential_env") or source.get("required_env")
+        credential_value = ""
+        if credential_env:
+            credential_value = os.getenv(str(credential_env), "").strip()
+        if not credential_value:
+            credential_value = str(source.get("api_key") or "").strip()
+        model.append(
+            {
+                "source_id": source["id"],
+                "source_label": source.get("label", source["id"]),
+                "enabled": bool(source.get("enabled", True)),
+                "auth_mode": auth_mode,
+                "status": "configured" if (auth_mode == "no_key" or bool(credential_value)) else "missing_credentials",
+                "credential_present": bool(credential_value),
+                "credential_env": credential_env,
+            }
+        )
+    return model
 
 
 def _date_to_epoch_bounds(start_date: date, end_date: date) -> tuple[int, int]:
@@ -531,16 +600,23 @@ def fetch_gdelt(
         "startdatetime": run_input.start_date.strftime("%Y%m%d000000"),
         "enddatetime": run_input.end_date.strftime("%Y%m%d235959"),
     }
-    api_key = os.getenv("GDELT_API_KEY") or source.get("api_key")
+    api_key, from_override = _resolve_source_credential(source)
     if api_key:
         params["key"] = api_key
 
     metadata: dict[str, Any] = {
         "fetch_mode": "gdelt_doc_2_json",
+        "access_mode": "configured_key" if api_key else "free_public",
         "request_params": {key: value for key, value in params.items() if key != "key"},
         "api_key_provided": bool(api_key),
+        "credential_from_ui_override": from_override,
+        "attempted": True,
+        "succeeded": False,
+        "failed": False,
+        "error_detail": None,
         "http_status": None,
         "response_bytes": 0,
+        "result_count": 0,
         "result_state": "failed",
     }
     warnings: list[str] = []
@@ -551,7 +627,8 @@ def fetch_gdelt(
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
-        metadata["error_details"] = str(exc)
+        metadata["failed"] = True
+        metadata["error_detail"] = str(exc)
         return SourceResult(
             source_id=source_id,
             source_label=source_label,
@@ -581,6 +658,7 @@ def fetch_gdelt(
         if _in_date_window(item.get("published_at"), run_input)
     ]
 
+    metadata["result_count"] = len(raw_items)
     if not raw_items:
         warnings.append("gdelt_empty_result")
         metadata["result_state"] = "empty"
@@ -588,6 +666,7 @@ def fetch_gdelt(
         metadata["result_state"] = "partial"
     else:
         metadata["result_state"] = "full"
+    metadata["succeeded"] = True
 
     return SourceResult(
         source_id=source_id,
@@ -667,7 +746,7 @@ def fetch_twitter(
     source_id = source["id"]
     source_label = source["label"]
 
-    token = os.getenv("TWITTER_BEARER_TOKEN")
+    token, from_override = _resolve_source_credential(source)
     if not token:
         return SourceResult(
             source_id=source_id,
@@ -676,7 +755,7 @@ def fetch_twitter(
             articles=[],
             warnings=["missing_twitter_bearer_token"],
             error="TWITTER_BEARER_TOKEN not configured",
-            metadata={"fetch_mode": "twitter_api_v2", "token_present": False},
+            metadata={"fetch_mode": "twitter_api_v2", "token_present": False, "credential_from_ui_override": from_override},
         )
 
     resolved_max_records = _resolve_max_records(max_records, source, default=100)
@@ -717,7 +796,7 @@ def fetch_twitter(
         status="success",
         articles=[item for item in canonical if item],
         warnings=[],
-        metadata={"fetch_mode": "twitter_api_v2", "token_present": True},
+        metadata={"fetch_mode": "twitter_api_v2", "token_present": True, "credential_from_ui_override": from_override},
     )
 
 
@@ -1399,6 +1478,34 @@ def _build_validation_report(
             stop_run=True,
         )
 
+    undated_count = int(normalization.get("undated_article_count", 0) or 0)
+    if undated_count == 0 and normalization.get("canonical_articles"):
+        undated_count = len(
+            [article for article in normalization.get("canonical_articles", []) if article.get("date_status") == "unknown"]
+        )
+    undated_ratio = (undated_count / valid_count) if valid_count else 0.0
+    if undated_ratio >= 0.5:
+        add_event(
+            "FM-016-excessive-undated-articles",
+            "fail",
+            "Undated article share is too high for trustworthy timeline interpretation.",
+            {"undated_article_count": undated_count, "valid_count": valid_count, "percent_undated": round(undated_ratio, 3)},
+            "stop if undated_ratio >= 0.50; warn if >= 0.20",
+            "Critical trust gate: excessive undated coverage.",
+            "Improve source date extraction before publish.",
+            stop_run=True,
+        )
+    elif undated_ratio >= 0.2:
+        add_event(
+            "FM-016-excessive-undated-articles",
+            "warn",
+            "Undated article share is elevated and may blur timeline peaks.",
+            {"undated_article_count": undated_count, "valid_count": valid_count, "percent_undated": round(undated_ratio, 3)},
+            "warn if undated_ratio >= 0.20",
+            "Warning badge: elevated undated article share.",
+            "Proceed with caution and inspect undated bucket.",
+        )
+
     unique_sources = len({article.get("source") for article in normalization.get("canonical_articles", []) if article.get("source")})
     if unique_sources <= 1 and valid_count >= 5:
         add_event(
@@ -1565,9 +1672,13 @@ def _build_validation_report(
     }
 
 
-def ingest_articles(run_input: RunInput, max_records: int | None = None) -> dict[str, Any]:
+def ingest_articles(
+    run_input: RunInput,
+    max_records: int | None = None,
+    source_settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     requested_at = datetime.now(timezone.utc).isoformat()
-    source_configs = _load_source_configs()
+    source_configs = _resolve_source_settings(_load_all_source_configs(), source_settings)
 
     session = requests.Session()
     session.headers.update({"User-Agent": "news-discovery-system/1.0 (+analyst-workflow)"})
@@ -1581,8 +1692,11 @@ def ingest_articles(run_input: RunInput, max_records: int | None = None) -> dict
     empty: list[str] = []
 
     for source in source_configs:
+        if not source.get("enabled", True):
+            continue
         source_id = source["id"]
         attempted.append(source_id)
+        auth_mode = source.get("auth_mode", "no_key")
 
         fetcher = SOURCE_ADAPTER_REGISTRY.get(source_id)
         if not fetcher:
@@ -1596,6 +1710,26 @@ def ingest_articles(run_input: RunInput, max_records: int | None = None) -> dict
                     "warnings": ["missing_source_adapter"],
                     "error": f"No source adapter registered for {source_id}",
                     "metadata": {"source_type": source.get("type")},
+                }
+            )
+            continue
+
+        credential_value, credential_from_override = _resolve_source_credential(source)
+        if auth_mode == "required_key" and not credential_value:
+            skipped.append(source_id)
+            source_runs.append(
+                {
+                    "source_id": source_id,
+                    "source_label": source.get("label", source_id),
+                    "status": "skipped",
+                    "article_count": 0,
+                    "warnings": ["missing_required_credentials"],
+                    "error": f"Missing required credentials for source '{source_id}'",
+                    "metadata": {
+                        "auth_mode": auth_mode,
+                        "credential_present": False,
+                        "credential_from_ui_override": credential_from_override,
+                    },
                 }
             )
             continue
@@ -1620,7 +1754,12 @@ def ingest_articles(run_input: RunInput, max_records: int | None = None) -> dict
                     "article_count": len(result.articles),
                     "warnings": result.warnings,
                     "error": result.error,
-                    "metadata": result.metadata or {},
+                    "metadata": {
+                        "auth_mode": auth_mode,
+                        "credential_present": bool(credential_value),
+                        "credential_from_ui_override": credential_from_override,
+                        **(result.metadata or {}),
+                    },
                 }
             )
         except Exception as exc:
@@ -1633,7 +1772,11 @@ def ingest_articles(run_input: RunInput, max_records: int | None = None) -> dict
                     "article_count": 0,
                     "warnings": ["source_fetch_failed"],
                     "error": str(exc),
-                    "metadata": {},
+                    "metadata": {
+                        "auth_mode": auth_mode,
+                        "credential_present": bool(credential_value),
+                        "credential_from_ui_override": credential_from_override,
+                    },
                 }
             )
 
@@ -1645,6 +1788,9 @@ def ingest_articles(run_input: RunInput, max_records: int | None = None) -> dict
             "failed": run["status"] == "failed",
             "skipped": run["status"] == "skipped",
             "article_count": run["article_count"],
+            "auth_mode": (run.get("metadata") or {}).get("auth_mode"),
+            "credential_present": bool((run.get("metadata") or {}).get("credential_present")),
+            "error_detail": run.get("error"),
             "fallback_used": bool((run.get("metadata") or {}).get("used_rss_fallback")),
         }
         for run in source_runs
@@ -1721,6 +1867,7 @@ def normalize_articles(raw_hits: list[dict[str, Any]], source: str = "multi") ->
         "validation_issues": validation_issues,
         "valid_count": len(records),
         "invalid_count": len(validation_issues),
+        "undated_article_count": len([record for record in records if record.get("date_status") == "unknown"]),
     }
 
 
@@ -1737,15 +1884,20 @@ def aggregate_daily_counts(canonical_articles: list[dict[str, Any]]) -> list[dic
     return [{"day": day, "article_count": counts[day]} for day in sorted(counts.keys())]
 
 
-def run_workflow(run_input: RunInput) -> dict[str, Any]:
+def run_workflow(run_input: RunInput, source_settings: dict[str, Any] | None = None) -> dict[str, Any]:
     run_id = f"run_{uuid4().hex[:10]}"
     started_at = datetime.now(timezone.utc).isoformat()
 
-    ingestion = ingest_articles(run_input)
+    if source_settings is None:
+        ingestion = ingest_articles(run_input)
+    else:
+        ingestion = ingest_articles(run_input, source_settings=source_settings)
     normalization = normalize_articles(ingestion["raw_hits"], source="multi")
     timeline = aggregate_daily_counts(normalization["canonical_articles"])
     known_timeline = [point for point in timeline if point["day"] != "unknown"]
     unknown_timeline_count = sum(point["article_count"] for point in timeline if point["day"] == "unknown")
+    dated_count = sum(point["article_count"] for point in known_timeline)
+    percent_undated = round((unknown_timeline_count / normalization["valid_count"]), 3) if normalization["valid_count"] else 0.0
     peak_source = known_timeline or timeline
     peak_day = max(peak_source, key=lambda item: item["article_count"])["day"] if peak_source else None
     clustering = _build_clusters(normalization["canonical_articles"])
@@ -1753,6 +1905,9 @@ def run_workflow(run_input: RunInput) -> dict[str, Any]:
         normalization["canonical_articles"], clustering["article_to_cluster"]
     )
     geospatial = _extract_geospatial_entities(normalization["canonical_articles"])
+    location_type_counts = dict(
+        Counter(entity.get("location_type") or "unknown" for entity in geospatial.get("entities", []))
+    )
     evidence_bundles = _build_evidence_bundles(
         clustering["clusters"],
         timeline,
@@ -1814,9 +1969,16 @@ def run_workflow(run_input: RunInput) -> dict[str, Any]:
                 "daily_counts": timeline,
                 "total_days": len(timeline),
                 "active_days": len(known_timeline),
+                "dated_article_count": dated_count,
+                "undated_article_count": unknown_timeline_count,
+                "percent_undated": percent_undated,
                 "unknown_date_count": unknown_timeline_count,
+                "primary_peak_excludes_unknown": bool(known_timeline),
                 "peak_day": peak_day,
-                "geospatial": {"map_markers": geospatial["map_markers"]},
+                "geospatial": {
+                    "map_markers": geospatial["map_markers"],
+                    "location_type_counts": location_type_counts,
+                },
             },
         },
         "artifacts": artifacts,

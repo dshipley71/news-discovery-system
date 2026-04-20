@@ -78,6 +78,7 @@ Ingestion output exposes:
   - `per_source_warnings`
   - `per_source_status`
   - ingestion duplicate metrics
+  - source auth/credential state (`auth_mode`, `credential_present`)
 
 ## Early duplicate control
 Before downstream normalization/analysis, ingestion applies lightweight duplicate suppression across sources:
@@ -113,3 +114,17 @@ This reduces cross-source duplicate inflation while preserving conservative, aud
   - `skipped`
   - `article_count`
   - `fallback_used`
+  - `auth_mode`
+  - `credential_present`
+  - `error_detail`
+- Source settings are now first-class runtime input:
+  - per-source enabled/disabled
+  - per-source credential override (UI supplied)
+  - missing credentials for `required_key` sources produce `skipped`, not `failed`
+- GDELT telemetry explicitly reports:
+  - `attempted`
+  - `succeeded`
+  - `failed`
+  - `error_detail`
+  - `result_count`
+  - `access_mode` (`free_public` default)
