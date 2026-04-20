@@ -13,6 +13,13 @@ Required controls:
 - `Run Workflow`
 - optional `Theme` selector (`Dark` default, optional `Light`)
 
+Required source controls:
+- Source Settings / Credentials accordion with per-source:
+  - enabled/disabled toggle
+  - auth mode visibility (`no_key`, `optional_key`, `required_key`)
+  - credential/token input when applicable
+  - explicit status table (enabled, auth mode, credential present, execution status)
+
 Behavior:
 - Dark theme is analyst-facing default.
 - Light/Dark can be switched in-session.
@@ -42,6 +49,11 @@ Contains:
 - trend summary text
 - explicit drill-down table from `artifacts.evidence_bundles.peak_to_clusters_articles`
 - peak detail selector and JSON detail panel
+- dated/undated integrity summary:
+  - dated article count
+  - undated article count
+  - percent undated
+  - primary peak excludes unknown-date buckets when known-date buckets exist
 
 Drill-down path:
 - `peak day -> clusters -> article IDs`
@@ -57,6 +69,10 @@ Map semantics:
 - marker intensity/color = activity (`low|medium|high`)
 - confidence cue = `avg_confidence`
 - ambiguity cue = `ambiguous_count`
+- location type counts in payload for future upgrades:
+  - `event_location`
+  - `source_location`
+  - `mentioned_location`
 
 Drill-down path:
 - `location -> clusters -> article IDs`

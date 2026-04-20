@@ -38,6 +38,7 @@ Each `event` includes:
 | FM-010-citation-support | Missing/weak citations | warn/fail | fail if citation coverage incomplete; warn if weak citation share >= 0.40 |
 | FM-011-silent-ui-degradation | Missing artifact contract | fail | fail if any required artifact key is absent |
 | FM-012-timeline-normalization-mismatch | Aggregation inconsistency | fail | fail if timeline total article count != normalization valid_count |
+| FM-016-excessive-undated-articles | Date integrity degradation | warn/fail | warn if undated ratio >= 0.20; fail if >= 0.50 |
 
 ## Warn vs Stop policy
 - **Warn:** analyst may continue inspection, but must see issue and remediation in UI.
@@ -81,3 +82,4 @@ These rules strengthen publish safety when analyst trust would otherwise be over
 - `unknown` publication dates are tracked explicitly and surfaced in aggregation and warnings.
 - Timeline peak evaluation prioritizes known-day buckets whenever any known-day evidence exists.
 - `FM-014-unknown-date-peak` remains a stop gate only when the peak candidates are entirely unknown-dated evidence.
+- `FM-016-excessive-undated-articles` escalates when undated share is high even if a known-date peak exists.

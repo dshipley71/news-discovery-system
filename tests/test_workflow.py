@@ -41,7 +41,7 @@ def test_multiple_source_merge_behavior(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(
         workflow,
-        "_load_source_configs",
+        "_load_all_source_configs",
         lambda: [{"id": "reddit", "label": "Reddit"}, {"id": "google_news", "label": "Google"}],
     )
 
@@ -83,7 +83,7 @@ def test_partial_source_failure_behavior(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setattr(
         workflow,
-        "_load_source_configs",
+        "_load_all_source_configs",
         lambda: [{"id": "reddit", "label": "Reddit"}, {"id": "gdelt", "label": "GDELT"}],
     )
     monkeypatch.setattr(
@@ -104,7 +104,7 @@ def test_partial_source_failure_behavior(monkeypatch: pytest.MonkeyPatch) -> Non
     gdelt_run = next(item for item in ingestion["source_runs"] if item["source_id"] == "gdelt")
     assert gdelt_run["status"] == "failed"
     assert gdelt_run["error"]
-    assert gdelt_run["metadata"] == {}
+    assert gdelt_run["metadata"]["auth_mode"] == "no_key"
 
 
 def test_twitter_disabled_when_token_missing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -120,7 +120,8 @@ def test_twitter_disabled_when_token_missing(monkeypatch: pytest.MonkeyPatch) ->
     assert result.status == "skipped"
     assert result.articles == []
     assert "missing_twitter_bearer_token" in result.warnings
-    assert result.metadata == {"fetch_mode": "twitter_api_v2", "token_present": False}
+    assert result.metadata["fetch_mode"] == "twitter_api_v2"
+    assert result.metadata["token_present"] is False
 
 
 def test_hacker_news_algolia_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -684,6 +685,9 @@ def test_gdelt_transparent_failure_and_success(monkeypatch: pytest.MonkeyPatch) 
     assert failed.status == "failed"
     assert failed.metadata["http_status"] == 503
     assert failed.metadata["result_state"] == "failed"
+    assert failed.metadata["attempted"] is True
+    assert failed.metadata["failed"] is True
+    assert failed.metadata["error_detail"]
     assert failed.error
 
     class SuccessSession:
@@ -703,6 +707,8 @@ def test_gdelt_transparent_failure_and_success(monkeypatch: pytest.MonkeyPatch) 
     assert len(success.articles) == 1
     assert success.metadata["http_status"] == 200
     assert success.metadata["result_state"] == "partial"
+    assert success.metadata["result_count"] == 1
+    assert success.metadata["succeeded"] is True
 
 
 def test_validation_stops_on_unknown_peak_and_required_gdelt_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -743,3 +749,75 @@ def test_unknown_dates_do_not_override_known_peak(monkeypatch: pytest.MonkeyPatc
     })
     result = run_workflow(run_input)
     assert result["stages"]["aggregation"]["peak_day"] == "2026-04-10"
+    assert result["stages"]["aggregation"]["dated_article_count"] == 2
+    assert result["stages"]["aggregation"]["undated_article_count"] == 2
+    assert result["stages"]["aggregation"]["primary_peak_excludes_unknown"] is True
+
+
+def test_source_settings_disable_source_and_required_credentials_skip(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_input = RunInput(topic="settings", start_date=date(2026, 4, 1), end_date=date(2026, 4, 17))
+    monkeypatch.delenv("TWITTER_BEARER_TOKEN", raising=False)
+    monkeypatch.setattr(
+        workflow,
+        "_load_all_source_configs",
+        lambda: [
+            {"id": "reddit", "label": "Reddit", "enabled": True, "auth_mode": "no_key"},
+            {"id": "twitter", "label": "Twitter", "enabled": True, "auth_mode": "required_key", "credential_env": "TWITTER_BEARER_TOKEN"},
+        ],
+    )
+    monkeypatch.setattr(
+        workflow,
+        "SOURCE_ADAPTER_REGISTRY",
+        {
+            "reddit": lambda s, c, r, m: _ok_result("reddit", "A", "https://example.com/a", "2026-04-10T10:00:00Z"),
+            "twitter": lambda s, c, r, m: _ok_result("twitter", "B", "https://example.com/b", "2026-04-10T11:00:00Z"),
+        },
+    )
+
+    ingestion = ingest_articles(
+        run_input,
+        source_settings={
+            "sources": {
+                "reddit": {"enabled": False, "credential": ""},
+                "twitter": {"enabled": True, "credential": ""},
+            }
+        },
+    )
+
+    assert ingestion["sources_attempted"] == ["twitter"]
+    assert ingestion["sources_skipped"] == ["twitter"]
+    assert ingestion["sources_failed"] == []
+    twitter_run = ingestion["source_runs"][0]
+    assert twitter_run["status"] == "skipped"
+    assert "missing_required_credentials" in twitter_run["warnings"]
+
+
+def test_validation_tightens_on_excessive_undated_articles(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_input = RunInput(topic="undated", start_date=date(2026, 4, 1), end_date=date(2026, 4, 17))
+    monkeypatch.setattr(workflow, "ingest_articles", lambda _: {
+        "raw_hits": [
+            {"article_id": "a1", "title": "A", "url": "https://x1", "published_at": "bad-1", "source": "reddit"},
+            {"article_id": "a2", "title": "B", "url": "https://x2", "published_at": "bad-2", "source": "reddit"},
+            {"article_id": "a3", "title": "C", "url": "https://x3", "published_at": "2026-04-11T00:00:00Z", "source": "reddit"},
+        ],
+        "hits_count": 3,
+        "source_runs": [{"source_id": "reddit", "status": "success", "metadata": {}, "warnings": []}],
+        "sources_attempted": ["reddit"],
+        "sources_succeeded": ["reddit"],
+        "sources_failed": [],
+        "telemetry": {"ingestion_duplicate_ratio": 0.0, "duplicate_map": []},
+    })
+    result = run_workflow(run_input)
+    failed_rules = {event["rule_id"] for event in result["stages"]["validation"]["events"] if event["status"] == "fail"}
+    assert "FM-016-excessive-undated-articles" in failed_rules
+
+
+def test_source_settings_ui_payload_wiring() -> None:
+    from gr_app import _build_source_settings_payload
+
+    payload = _build_source_settings_payload(
+        True, "", True, "", True, "", True, "", True, "", True, "token-123"
+    )
+    assert payload["sources"]["gdelt"]["enabled"] is True
+    assert payload["sources"]["gdelt"]["credential"] == ""
+    assert payload["sources"]["twitter"]["credential"] == "token-123"

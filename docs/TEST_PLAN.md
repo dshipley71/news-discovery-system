@@ -22,9 +22,11 @@ Validate that the in-repo Gradio + Colab workflow handles analyst-critical failu
 | Hacker News source adapter availability | `test_hacker_news_algolia_fetch` | Hacker News remains fetchable as supported lightweight discussion source |
 | Source status classification (failed/skipped/empty) | `test_source_failure_reporting_distinguishes_skipped_and_empty` | Distinct ingestion status lists remain inspectable |
 | Per-source telemetry contract | `test_multiple_source_merge_behavior`, `test_source_failure_reporting_distinguishes_skipped_and_empty` | Attempt/success/fail/skip/article-count/fallback fields emitted per source |
+| Source settings + required credential skip | `test_source_settings_disable_source_and_required_credentials_skip` | Disabled sources are not attempted; missing required credentials become skipped |
 | Aggregation consistency | `test_aggregation_consistency_matches_normalized_total` | Timeline total equals normalized valid count |
 | Multi-day date bucketing | `test_parse_date_buckets_multi_day_for_gdelt_format` | GDELT/compact timestamps resolve to correct day buckets |
 | Unknown-date peak prioritization | `test_unknown_dates_do_not_override_known_peak` | Known-day peaks are used when available; unknown remains tracked |
+| Excessive undated article threshold | `test_validation_tightens_on_excessive_undated_articles` | STOP when undated share exceeds threshold |
 | Rate limiting/backoff | `test_reddit_retry_and_rss_fallback`, validation warning test | WARN with retry metadata |
 | Empty ingestion | `test_validation_stop_on_empty_ingestion` | STOP |
 | Schema drift across sources | Existing schema consistency + normalization counts | WARN/STOP by invalid ratio |
@@ -64,4 +66,6 @@ Accepted when:
 - GDELT adapter transparent failure telemetry vs successful parse path.
 - Validation stop gate for required GDELT failure.
 - Validation stop gate for unknown-date peak bucket.
+- Validation stop gate for excessive undated article share.
 - Geospatial location-type separation (`event_location`/`mentioned_location`/`source_location`) and event-only mapping behavior.
+- Source settings payload wiring from Gradio controls to backend execution payload.

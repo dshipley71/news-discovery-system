@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
 
-from src.news_app.workflow import RunInput, run_workflow
+from src.news_app.workflow import RunInput, get_source_settings_model, run_workflow
 
 
 DARK_LIGHT_CSS = """
@@ -78,6 +78,46 @@ def _pretty_json(data: Any) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False, default=str)
 
 
+def _default_source_rows() -> list[list[Any]]:
+    return [
+        [
+            source["source_id"],
+            source["source_label"],
+            source["enabled"],
+            source["auth_mode"],
+            source["credential_present"],
+            source["status"],
+        ]
+        for source in get_source_settings_model()
+    ]
+
+
+def _build_source_settings_payload(
+    hacker_news_enabled: bool,
+    hacker_news_credential: str,
+    reddit_enabled: bool,
+    reddit_credential: str,
+    google_news_enabled: bool,
+    google_news_credential: str,
+    duckduckgo_enabled: bool,
+    duckduckgo_credential: str,
+    gdelt_enabled: bool,
+    gdelt_credential: str,
+    twitter_enabled: bool,
+    twitter_credential: str,
+) -> dict[str, Any]:
+    return {
+        "sources": {
+            "hacker_news": {"enabled": bool(hacker_news_enabled), "credential": hacker_news_credential},
+            "reddit": {"enabled": bool(reddit_enabled), "credential": reddit_credential},
+            "google_news": {"enabled": bool(google_news_enabled), "credential": google_news_credential},
+            "web_duckduckgo": {"enabled": bool(duckduckgo_enabled), "credential": duckduckgo_credential},
+            "gdelt": {"enabled": bool(gdelt_enabled), "credential": gdelt_credential},
+            "twitter": {"enabled": bool(twitter_enabled), "credential": twitter_credential},
+        }
+    }
+
+
 def _timeline_figure(daily_counts: list[dict[str, Any]]) -> Any:
     fig, ax = plt.subplots(figsize=(10, 4))
 
@@ -114,18 +154,27 @@ def _timeline_figure(daily_counts: list[dict[str, Any]]) -> Any:
     return fig
 
 
-def _build_timeline_summary(daily_counts: list[dict[str, Any]]) -> str:
+def _build_timeline_summary(
+    daily_counts: list[dict[str, Any]],
+    *,
+    dated_article_count: int = 0,
+    undated_article_count: int = 0,
+    percent_undated: float = 0.0,
+    primary_peak_excludes_unknown: bool = False,
+) -> str:
     if not daily_counts:
         return "No timeline data returned; unable to identify spikes or trend direction."
 
     total_articles = sum(int(point.get("article_count", 0)) for point in daily_counts)
-    peak_day = max(daily_counts, key=lambda point: int(point.get("article_count", 0)))
+    peak_candidates = [point for point in daily_counts if point.get("day") != "unknown"] if primary_peak_excludes_unknown else daily_counts
+    peak_day = max(peak_candidates, key=lambda point: int(point.get("article_count", 0)))
     first_count = int(daily_counts[0].get("article_count", 0))
     last_count = int(daily_counts[-1].get("article_count", 0))
     direction = "increasing" if last_count > first_count else "decreasing" if last_count < first_count else "flat"
     return (
         f"{len(daily_counts)} active day(s), {total_articles} total article instances, "
         f"peak on {peak_day.get('day')} ({peak_day.get('article_count')} articles), "
+        f"dated={dated_article_count}, undated={undated_article_count} ({percent_undated:.1%}), "
         f"overall pattern appears {direction}."
     )
 
@@ -496,6 +545,7 @@ def _build_run_summary(
     normalization = stages.get("normalization", {})
     warnings = stages.get("warnings", [])
     validation = stages.get("validation", {})
+    aggregation = stages.get("aggregation", {})
 
     source_runs = ingestion.get("source_runs", [])
     attempted_sources = len(ingestion.get("sources_attempted", []))
@@ -536,6 +586,9 @@ def _build_run_summary(
         f"- **Date range:** `{result.get('input', {}).get('start_date')} → {result.get('input', {}).get('end_date')}`\n"
         f"- **Source totals:** `{succeeded_sources}/{attempted_sources}` succeeded, `{failed_sources}` partial/failed\n"
         f"- **Article totals:** `{normalization.get('valid_count', 0)}` valid, `{ingestion.get('hits_count', 0)}` ingested\n"
+        f"- **Date integrity:** `{aggregation.get('dated_article_count', 0)}` dated, "
+        f"`{aggregation.get('undated_article_count', 0)}` undated "
+        f"(`{float(aggregation.get('percent_undated', 0.0) or 0.0):.1%}` undated)\n"
         f"- **Validation gates:** `{validation.get('warn_count', 0)}` warn, `{validation.get('fail_count', 0)}` fail, "
         f"`can_publish={validation.get('can_publish', True)}`\n"
         f"- **Cluster totals:** `{len(cluster_rows)}`\n"
@@ -545,19 +598,50 @@ def _build_run_summary(
     )
 
 
-def run_ui_workflow(topic: str, start_date: str, end_date: str):
+def run_ui_workflow(
+    topic: str,
+    start_date: str,
+    end_date: str,
+    hacker_news_enabled: bool,
+    hacker_news_credential: str,
+    reddit_enabled: bool,
+    reddit_credential: str,
+    google_news_enabled: bool,
+    google_news_credential: str,
+    duckduckgo_enabled: bool,
+    duckduckgo_credential: str,
+    gdelt_enabled: bool,
+    gdelt_credential: str,
+    twitter_enabled: bool,
+    twitter_credential: str,
+):
     empty_fig = _timeline_figure([])
     empty_map = _build_map_plot([])
     empty_dropdown = gr.Dropdown(choices=[], value=None)
 
     try:
         topic, start_date_obj, end_date_obj = _validate_inputs(topic, start_date, end_date)
+        source_settings = _build_source_settings_payload(
+            hacker_news_enabled,
+            hacker_news_credential,
+            reddit_enabled,
+            reddit_credential,
+            google_news_enabled,
+            google_news_credential,
+            duckduckgo_enabled,
+            duckduckgo_credential,
+            gdelt_enabled,
+            gdelt_credential,
+            twitter_enabled,
+            twitter_credential,
+        )
         result = run_workflow(
             RunInput(
                 topic=topic,
                 start_date=start_date_obj,
                 end_date=end_date_obj,
-            )
+            ),
+            source_settings=source_settings,
         )
     except Exception as exc:
         error_message = f"Workflow execution failed: {exc}"
@@ -589,6 +673,8 @@ def run_ui_workflow(topic: str, start_date: str, end_date: str):
             "{}",
             "{}",
             "{}",
+            _default_source_rows(),
+            "{}",
             empty_fig,
         )
 
@@ -600,7 +686,13 @@ def run_ui_workflow(topic: str, start_date: str, end_date: str):
     map_rows, map_table_rows, map_bundle_rows, location_lookup, location_choices = _build_map_rows(result)
     peak_rows, peak_lookup, peak_choices = _build_timeline_drilldown(result)
 
-    timeline_summary = _build_timeline_summary(aggregation.get("daily_counts", []))
+    timeline_summary = _build_timeline_summary(
+        aggregation.get("daily_counts", []),
+        dated_article_count=int(aggregation.get("dated_article_count", 0) or 0),
+        undated_article_count=int(aggregation.get("undated_article_count", 0) or 0),
+        percent_undated=float(aggregation.get("percent_undated", 0.0) or 0.0),
+        primary_peak_excludes_unknown=bool(aggregation.get("primary_peak_excludes_unknown", False)),
+    )
     run_summary = _build_run_summary(result, cluster_views["cluster_rows"], map_rows, citation_index, timeline_summary)
 
     status = f"Completed: {result.get('run_id', 'unknown-run-id')}"
@@ -634,6 +726,18 @@ def run_ui_workflow(topic: str, start_date: str, end_date: str):
         _pretty_json(cluster_views["cluster_lookup"]),
         _pretty_json(peak_lookup),
         _pretty_json(location_lookup),
+        [
+            [
+                run.get("source_id"),
+                run.get("source_label"),
+                run.get("status") != "disabled",
+                (run.get("metadata") or {}).get("auth_mode", "no_key"),
+                bool((run.get("metadata") or {}).get("credential_present")),
+                run.get("status"),
+            ]
+            for run in stages.get("ingestion", {}).get("source_runs", [])
+        ],
+        _pretty_json(source_settings),
         _timeline_figure(aggregation.get("daily_counts", [])),
     )
 
@@ -642,6 +746,7 @@ def build_app() -> gr.Blocks:
     today = datetime.now(timezone.utc).date()
     default_end = today
     default_start = today - timedelta(days=7)
+    source_defaults = {row["source_id"]: row for row in get_source_settings_model()}
 
     with gr.Blocks(title="News Discovery Analyst Dashboard", css=DARK_LIGHT_CSS) as demo:
         gr.Markdown(
@@ -674,6 +779,31 @@ Run once and review run summary, timeline, map, clusters, citations, and validat
 
         status = gr.Textbox(label="Workflow Status", interactive=False)
         run_summary = gr.Markdown("### Run Summary & Warnings\n- Awaiting workflow execution.")
+
+        with gr.Accordion("Source Settings / Credentials", open=False):
+            gr.Markdown("Configure per-source enablement and credentials. Missing required credentials result in **skipped** status.")
+            source_settings_table = gr.Dataframe(
+                headers=["source_id", "source_label", "enabled", "auth_mode", "credential_present", "status"],
+                datatype=["str", "str", "bool", "str", "bool", "str"],
+                label="Source Configuration Status",
+                value=_default_source_rows(),
+                interactive=False,
+            )
+            with gr.Row():
+                hacker_news_enabled = gr.Checkbox(label="Hacker News enabled", value=source_defaults["hacker_news"]["enabled"])
+                hacker_news_credential = gr.Textbox(label="Hacker News credential (not required)", value="", type="password")
+                reddit_enabled = gr.Checkbox(label="Reddit enabled", value=source_defaults["reddit"]["enabled"])
+                reddit_credential = gr.Textbox(label="Reddit credential (not required)", value="", type="password")
+            with gr.Row():
+                google_news_enabled = gr.Checkbox(label="Google News enabled", value=source_defaults["google_news"]["enabled"])
+                google_news_credential = gr.Textbox(label="Google News credential (not required)", value="", type="password")
+                duckduckgo_enabled = gr.Checkbox(label="DuckDuckGo enabled", value=source_defaults["web_duckduckgo"]["enabled"])
+                duckduckgo_credential = gr.Textbox(label="DuckDuckGo credential (not required)", value="", type="password")
+            with gr.Row():
+                gdelt_enabled = gr.Checkbox(label="GDELT enabled", value=source_defaults["gdelt"]["enabled"])
+                gdelt_credential = gr.Textbox(label="GDELT credential (no key required by default)", value="", type="password")
+                twitter_enabled = gr.Checkbox(label="X/Twitter enabled", value=source_defaults["twitter"]["enabled"])
+                twitter_credential = gr.Textbox(label="X/Twitter bearer token (required)", value="", type="password")
 
         with gr.Row():
             with gr.Column(elem_classes=["nd-panel"]):
@@ -776,6 +906,7 @@ Run once and review run summary, timeline, map, clusters, citations, and validat
             cluster_payload = gr.Code(label="Cluster Payload", language="json")
             geospatial_payload = gr.Code(label="Geospatial Payload", language="json")
             warning_payload = gr.Code(label="Warning Payload", language="json")
+            source_settings_payload = gr.Code(label="Source Settings Payload", language="json")
 
         cluster_lookup = gr.Textbox(value="{}", visible=False)
         peak_lookup = gr.Textbox(value="{}", visible=False)
@@ -816,7 +947,23 @@ Run once and review run summary, timeline, map, clusters, citations, and validat
 
         run_button.click(
             fn=run_ui_workflow,
-            inputs=[topic, start_date, end_date],
+            inputs=[
+                topic,
+                start_date,
+                end_date,
+                hacker_news_enabled,
+                hacker_news_credential,
+                reddit_enabled,
+                reddit_credential,
+                google_news_enabled,
+                google_news_credential,
+                duckduckgo_enabled,
+                duckduckgo_credential,
+                gdelt_enabled,
+                gdelt_credential,
+                twitter_enabled,
+                twitter_credential,
+            ],
             outputs=[
                 status,
                 run_summary,
@@ -846,6 +993,8 @@ Run once and review run summary, timeline, map, clusters, citations, and validat
                 cluster_lookup,
                 peak_lookup,
                 location_lookup,
+                source_settings_table,
+                source_settings_payload,
                 timeline_plot,
             ],
         )
