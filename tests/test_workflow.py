@@ -615,10 +615,13 @@ def test_timeline_multi_day_and_unknown_handling() -> None:
     )
     counts = aggregate_daily_counts(normalized["canonical_articles"])
     by_day = {row["day"]: row["article_count"] for row in counts}
+    counts_with_undated = aggregate_daily_counts(normalized["canonical_articles"], include_undated=True)
+    by_day_with_undated = {row["day"]: row["article_count"] for row in counts_with_undated}
 
     assert by_day["2026-04-10"] == 1
     assert by_day["2026-04-12"] == 1
-    assert by_day["unknown"] == 1
+    assert "unknown" not in by_day
+    assert by_day_with_undated["unknown"] == 1
 
 
 def test_reddit_fallback_triggers_on_empty_primary(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -711,7 +714,7 @@ def test_gdelt_transparent_failure_and_success(monkeypatch: pytest.MonkeyPatch) 
     assert success.metadata["succeeded"] is True
 
 
-def test_validation_stops_on_unknown_peak_and_required_gdelt_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validation_stops_on_undated_timeline_and_required_gdelt_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     run_input = RunInput(topic="integrity", start_date=date(2026, 4, 1), end_date=date(2026, 4, 17))
     monkeypatch.setattr(workflow, "ingest_articles", lambda _: {
         "raw_hits": [{"article_id": "a1", "title": "A", "url": "https://x", "published_at": "unknown-value", "source": "reddit"}],
@@ -810,6 +813,98 @@ def test_validation_tightens_on_excessive_undated_articles(monkeypatch: pytest.M
     result = run_workflow(run_input)
     failed_rules = {event["rule_id"] for event in result["stages"]["validation"]["events"] if event["status"] == "fail"}
     assert "FM-016-excessive-undated-articles" in failed_rules
+
+
+def test_normalization_parses_rfc2822_dates_and_derives_day() -> None:
+    normalized = normalize_articles(
+        [
+            {
+                "article_id": "rfc:1",
+                "title": "RFC date",
+                "url": "https://example.com/rfc",
+                "published_at": "Sun, 19 Apr 2026 09:24:52 GMT",
+                "source": "google_news",
+            }
+        ]
+    )
+    article = normalized["canonical_articles"][0]
+    assert article["date_status"] == "parsed"
+    assert article["published_at_parsed"] == "2026-04-19T09:24:52+00:00"
+    assert article["published_day"] == "2026-04-19"
+    assert article["date_parse_format_used"] == "rfc2822"
+    assert article["date_source_field"] == "published_at"
+    assert article["date_parse_error"] is None
+
+
+def test_normalization_parses_iso8601_dates() -> None:
+    normalized = normalize_articles(
+        [
+            {
+                "article_id": "iso:1",
+                "title": "ISO date",
+                "url": "https://example.com/iso",
+                "published_at": "2026-04-19T09:24:52Z",
+                "source": "google_news",
+            }
+        ]
+    )
+    article = normalized["canonical_articles"][0]
+    assert article["date_status"] == "parsed"
+    assert article["published_day"] == "2026-04-19"
+    assert article["date_parse_format_used"] == "iso8601"
+
+
+def test_normalization_distinguishes_missing_vs_parse_failed_and_fallback() -> None:
+    normalized = normalize_articles(
+        [
+            {"article_id": "a1", "title": "Missing", "url": "https://a1", "published_at": "", "source": "reddit"},
+            {"article_id": "a2", "title": "Failed", "url": "https://a2", "published_at": "not-a-date", "source": "reddit"},
+            {
+                "article_id": "a3",
+                "title": "Fallback",
+                "url": "https://a3",
+                "published_at": "",
+                "created_at": "2026-04-12T05:00:00Z",
+                "source": "reddit",
+            },
+        ]
+    )
+    by_id = {article["article_id"]: article for article in normalized["canonical_articles"]}
+    assert by_id["a1"]["date_status"] == "missing"
+    assert by_id["a1"]["date_parse_error"] == "missing_published_at"
+    assert by_id["a2"]["date_status"] == "parse_failed"
+    assert "unrecognized_date_format" in str(by_id["a2"]["date_parse_error"])
+    assert by_id["a3"]["date_status"] == "fallback_derived"
+    assert by_id["a3"]["date_source_field"] == "created_at"
+    assert by_id["a3"]["published_day"] == "2026-04-12"
+
+
+def test_run_workflow_emits_source_level_date_quality_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_input = RunInput(topic="dates", start_date=date(2026, 4, 1), end_date=date(2026, 4, 17))
+    monkeypatch.setattr(workflow, "ingest_articles", lambda _: {
+        "raw_hits": [
+            {"article_id": "a1", "title": "A", "url": "https://x1", "published_at": "2026-04-10T00:00:00Z", "source": "reddit"},
+            {"article_id": "a2", "title": "B", "url": "https://x2", "published_at": "bad-date", "source": "reddit"},
+            {"article_id": "a3", "title": "C", "url": "https://x3", "published_at": "", "source": "google_news"},
+        ],
+        "hits_count": 3,
+        "source_runs": [
+            {"source_id": "reddit", "status": "success", "metadata": {}, "warnings": []},
+            {"source_id": "google_news", "status": "success", "metadata": {}, "warnings": []},
+        ],
+        "sources_attempted": ["reddit", "google_news"],
+        "sources_succeeded": ["reddit", "google_news"],
+        "sources_failed": [],
+        "telemetry": {"ingestion_duplicate_ratio": 0.0, "duplicate_map": []},
+    })
+    result = run_workflow(run_input)
+    telemetry = result["stages"]["aggregation"]["source_date_quality"]
+    assert telemetry["reddit"]["total_articles"] == 2
+    assert telemetry["reddit"]["parsed_dates"] == 1
+    assert telemetry["reddit"]["parse_failures"] == 1
+    assert telemetry["reddit"]["missing_dates"] == 0
+    assert telemetry["reddit"]["percent_undated"] == 0.5
+    assert telemetry["google_news"]["missing_dates"] == 1
 
 
 def test_source_settings_ui_payload_wiring() -> None:

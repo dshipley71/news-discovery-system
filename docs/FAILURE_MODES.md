@@ -36,6 +36,7 @@ This document defines analyst-facing failure handling for the in-repo workflow (
 - **How it appears here:** `stages.aggregation.daily_counts` sum does not match `stages.normalization.valid_count`.
 - **Detection rule:** STOP when timeline total differs from canonical valid count.
 - **Prevention rule:** Robust date parsing and fallback day bucketing to avoid silent row drops.
+- **Date policy note:** primary timeline counts only successfully dated (`parsed`/`fallback_derived`) articles; `missing`/`parse_failed` are surfaced as undated telemetry and validation inputs.
 - **Analyst-visible UI signal:** Critical validation gate with measured `timeline_total` vs `valid_count`.
 - **Fallback behavior:** Keep run inspectable, but block publication until date normalization is corrected.
 - **Stop condition:** Any non-zero mismatch.
@@ -144,8 +145,8 @@ This repository intentionally keeps controls lightweight and in-repo. No externa
 
 ### FM-014 Unknown-date peak
 - **Description:** Timeline peak on `unknown` can mislead temporal conclusions.
-- **Detection rule:** STOP when peak candidates resolve to `unknown` (i.e., no known-day bucket can establish the peak).
-- **Analyst-visible signal:** Validation failure includes `peak_days` and `peak_count`.
+- **Detection rule:** STOP when no successfully dated articles remain for peak calculation (all canonical articles are undated).
+- **Analyst-visible signal:** Validation failure includes `dated_article_count` and `undated_article_count`.
 - **Fallback behavior:** Require date parsing correction before publication.
 
 ### Phase A source telemetry hardening
