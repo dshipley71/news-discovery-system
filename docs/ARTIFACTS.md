@@ -9,8 +9,12 @@ Define first-class backend artifacts emitted by `run_workflow` in `src/news_app/
    - Path: `artifacts.deduplicated_article_set`
    - Source: normalized canonical records after ingestion deduplication.
    - Date normalization fields per article:
+     - `updated_at`
+     - `retrieved_at`
      - `published_at_parsed`
      - `published_day`
+     - `timeline_date_used` (default publication-date day)
+     - `timeline_date_source`
      - `date_status` (`parsed`, `missing`, `parse_failed`, `fallback_derived`)
      - `date_source_field`
      - `date_parse_format_used`
@@ -78,6 +82,9 @@ The Gradio dashboard reads artifacts directly with these mappings:
   - `stages.ingestion`, `stages.normalization`, `stages.warnings`
 - **Timeline panel**
   - `stages.aggregation.daily_counts`
+  - default signal in each row is canonical (`article_count` / `canonical_count`)
+  - diagnostics include `raw_retrieved_count`, `duplicate_ratio`, and `source_breakdown[]`
+  - cluster timeline diagnostics in `stages.aggregation.daily_cluster_counts`
   - `stages.aggregation.source_date_quality`
   - `artifacts.evidence_bundles.peak_to_clusters_articles`
 - **Geospatial panel**

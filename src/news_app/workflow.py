@@ -149,11 +149,29 @@ def _canonicalize_url(url: str | None) -> str:
     if not url:
         return ""
     parsed = urlparse(url.strip())
-    clean_query = urlencode(sorted(parse_qsl(parsed.query, keep_blank_values=False)))
+
+    # Unwrap aggregator redirects where the original URL is encoded as query param.
+    if "news.google." in parsed.netloc.lower():
+        query_pairs = parse_qsl(parsed.query, keep_blank_values=False)
+        target_url = next((value for key, value in query_pairs if key.lower() == "url" and value), "")
+        if target_url:
+            return _canonicalize_url(target_url)
+
+    tracking_query_prefixes = ("utm_",)
+    tracking_query_exact = {"gclid", "fbclid", "oc", "ved", "ei", "guccounter"}
+    clean_pairs = []
+    for key, value in parse_qsl(parsed.query, keep_blank_values=False):
+        normalized_key = key.lower()
+        if normalized_key in tracking_query_exact:
+            continue
+        if any(normalized_key.startswith(prefix) for prefix in tracking_query_prefixes):
+            continue
+        clean_pairs.append((key, value))
+
     canonical = parsed._replace(
         scheme=parsed.scheme.lower(),
-        netloc=parsed.netloc.lower(),
-        query=clean_query,
+        netloc=parsed.netloc.lower().removeprefix("www."),
+        query=urlencode(sorted(clean_pairs)),
         fragment="",
     )
     return urlunparse(canonical).rstrip("/")
@@ -355,6 +373,8 @@ def _normalize_article(source_id: str, source_label: str, raw: dict[str, Any]) -
     title = (raw.get("title") or "").strip()
     url = (raw.get("url") or "").strip()
     published_at = raw.get("published_at")
+    updated_at = raw.get("updated_at")
+    retrieved_at = raw.get("retrieved_at") or datetime.now(timezone.utc).isoformat()
 
     if not title:
         return None
@@ -371,6 +391,8 @@ def _normalize_article(source_id: str, source_label: str, raw: dict[str, Any]) -
         "title": title,
         "url": url or None,
         "published_at": published_iso,
+        "updated_at": updated_at,
+        "retrieved_at": retrieved_at,
         "source": source_id,
         "source_label": source_label,
         "snippet": raw.get("snippet"),
@@ -577,7 +599,8 @@ def fetch_web_duckduckgo(
                 {
                     "title": title,
                     "url": url,
-                    "published_at": datetime.now(timezone.utc).isoformat(),
+                    "published_at": None,
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
                     "external_id": f"pattern{idx}:{url}",
                     "raw_source": f"ddg_html_pattern_{idx}",
                 }
@@ -1837,7 +1860,8 @@ def ingest_articles(
         "sources_skipped": skipped,
         "sources_empty": empty,
         "source_runs": source_runs,
-        "raw_hits": deduped_articles,
+        "raw_hits": all_articles,
+        "deduplicated_hits": deduped_articles,
         "hits_count": len(deduped_articles),
         "telemetry": {
             "per_source_article_counts": {
@@ -1846,6 +1870,8 @@ def ingest_articles(
             "per_source_warnings": {run["source_id"]: run["warnings"] for run in source_runs},
             "per_source_status": {run["source_id"]: run["status"] for run in source_runs},
             "per_source_telemetry": per_source_telemetry,
+            "raw_retrieved_count": len(all_articles),
+            "deduplicated_count": len(deduped_articles),
             **dedupe_meta,
         },
     }
@@ -1922,8 +1948,12 @@ def normalize_articles(raw_hits: list[dict[str, Any]], source: str = "multi") ->
             "title": hit.get("title"),
             "url": hit.get("url"),
             "published_at": published_at_raw,
+            "updated_at": hit.get("updated_at"),
+            "retrieved_at": hit.get("retrieved_at"),
             "published_at_parsed": parsed_published_at.isoformat() if parsed_published_at else None,
             "published_day": parsed_published_at.date().isoformat() if parsed_published_at else "unknown",
+            "timeline_date_used": parsed_published_at.date().isoformat() if parsed_published_at else "unknown",
+            "timeline_date_source": date_source_field if parsed_published_at else "unknown",
             "date_status": date_status,
             "date_source_field": date_source_field,
             "date_parse_format_used": date_parse_format_used,
@@ -1975,7 +2005,7 @@ def aggregate_daily_counts(canonical_articles: list[dict[str, Any]], include_und
     counts: Counter[str] = Counter()
 
     for article in canonical_articles:
-        day = article.get("published_day")
+        day = article.get("timeline_date_used") or article.get("published_day")
         if not day:
             parsed = _parse_date(article.get("published_at"))
             day = parsed.date().isoformat() if parsed else "unknown"
@@ -1986,6 +2016,87 @@ def aggregate_daily_counts(canonical_articles: list[dict[str, Any]], include_und
     return [{"day": day, "article_count": counts[day]} for day in sorted(counts.keys())]
 
 
+def _aggregate_cluster_daily_counts(
+    clusters: list[dict[str, Any]], canonical_articles: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    canonical_by_id = {article.get("article_id"): article for article in canonical_articles if article.get("article_id")}
+    cluster_counts: Counter[str] = Counter()
+    for cluster in clusters:
+        days = [
+            canonical_by_id[article_id].get("timeline_date_used")
+            for article_id in (cluster.get("article_ids") or [])
+            if article_id in canonical_by_id and canonical_by_id[article_id].get("timeline_date_used") not in {None, "unknown"}
+        ]
+        if not days:
+            continue
+        cluster_counts[min(days)] += 1
+    return [{"day": day, "cluster_count": cluster_counts[day]} for day in sorted(cluster_counts.keys())]
+
+
+def _build_timeline_breakdown(
+    raw_articles: list[dict[str, Any]],
+    canonical_articles: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    day_source_raw: dict[str, Counter[str]] = defaultdict(Counter)
+    day_source_canonical: dict[str, Counter[str]] = defaultdict(Counter)
+
+    for article in raw_articles:
+        source = article.get("source") or "unknown"
+        parsed = _parse_date(article.get("published_at"))
+        day = parsed.date().isoformat() if parsed else "unknown"
+        day_source_raw[day][source] += 1
+
+    for article in canonical_articles:
+        source = article.get("source") or "unknown"
+        day = article.get("timeline_date_used") or "unknown"
+        day_source_canonical[day][source] += 1
+
+    all_days = sorted(
+        day
+        for day in (set(day_source_raw.keys()) | set(day_source_canonical.keys()))
+        if day != "unknown"
+    )
+    timeline_rows: list[dict[str, Any]] = []
+    for day in all_days:
+        source_ids = sorted(set(day_source_raw.get(day, {}).keys()) | set(day_source_canonical.get(day, {}).keys()))
+        by_source: list[dict[str, Any]] = []
+        total_raw = 0
+        total_canonical = 0
+        for source_id in source_ids:
+            raw_count = int(day_source_raw.get(day, {}).get(source_id, 0))
+            canonical_count = int(day_source_canonical.get(day, {}).get(source_id, 0))
+            total_raw += raw_count
+            total_canonical += canonical_count
+            duplicates_removed = max(0, raw_count - canonical_count)
+            duplicate_ratio = (duplicates_removed / raw_count) if raw_count else 0.0
+            by_source.append(
+                {
+                    "source": source_id,
+                    "raw_retrieved_count": raw_count,
+                    "canonical_count": canonical_count,
+                    "duplicates_removed": duplicates_removed,
+                    "duplicate_ratio": round(duplicate_ratio, 3),
+                }
+            )
+
+        duplicates_removed_total = max(0, total_raw - total_canonical)
+        duplicate_ratio_total = (duplicates_removed_total / total_raw) if total_raw else 0.0
+        driver = max(by_source, key=lambda row: row["raw_retrieved_count"])["source"] if by_source else "unknown"
+        timeline_rows.append(
+            {
+                "day": day,
+                "article_count": total_canonical,
+                "canonical_count": total_canonical,
+                "raw_retrieved_count": total_raw,
+                "duplicates_removed": duplicates_removed_total,
+                "duplicate_ratio": round(duplicate_ratio_total, 3),
+                "dominant_source": driver,
+                "source_breakdown": by_source,
+            }
+        )
+    return timeline_rows
+
+
 def run_workflow(run_input: RunInput, source_settings: dict[str, Any] | None = None) -> dict[str, Any]:
     run_id = f"run_{uuid4().hex[:10]}"
     started_at = datetime.now(timezone.utc).isoformat()
@@ -1994,13 +2105,18 @@ def run_workflow(run_input: RunInput, source_settings: dict[str, Any] | None = N
         ingestion = ingest_articles(run_input)
     else:
         ingestion = ingest_articles(run_input, source_settings=source_settings)
-    normalization = normalize_articles(ingestion["raw_hits"], source="multi")
-    timeline = aggregate_daily_counts(normalization["canonical_articles"])
+    normalization = normalize_articles(
+        ingestion.get("deduplicated_hits", ingestion.get("raw_hits", [])),
+        source="multi",
+    )
+    timeline = _build_timeline_breakdown(ingestion.get("raw_hits", []), normalization["canonical_articles"])
+    cluster_timeline = _aggregate_cluster_daily_counts([], normalization["canonical_articles"])
     unknown_timeline_count = normalization["undated_article_count"]
     dated_count = sum(point["article_count"] for point in timeline)
     percent_undated = round((unknown_timeline_count / normalization["valid_count"]), 3) if normalization["valid_count"] else 0.0
     peak_day = max(timeline, key=lambda item: item["article_count"])["day"] if timeline else None
     clustering = _build_clusters(normalization["canonical_articles"])
+    cluster_timeline = _aggregate_cluster_daily_counts(clustering["clusters"], normalization["canonical_articles"])
     citation_index = _build_citation_index(
         normalization["canonical_articles"], clustering["article_to_cluster"]
     )
@@ -2067,6 +2183,8 @@ def run_workflow(run_input: RunInput, source_settings: dict[str, Any] | None = N
             "validation": validation,
             "aggregation": {
                 "daily_counts": timeline,
+                "daily_cluster_counts": cluster_timeline,
+                "timeline_signal_default": "canonical_count",
                 "total_days": len(timeline),
                 "active_days": len(timeline),
                 "dated_article_count": dated_count,
@@ -2075,6 +2193,9 @@ def run_workflow(run_input: RunInput, source_settings: dict[str, Any] | None = N
                 "unknown_date_count": unknown_timeline_count,
                 "primary_peak_excludes_unknown": True,
                 "peak_day": peak_day,
+                "raw_retrieved_count": ingestion.get("telemetry", {}).get("raw_retrieved_count", 0),
+                "deduplicated_count": ingestion.get("telemetry", {}).get("deduplicated_count", 0),
+                "cluster_count": len(clustering["clusters"]),
                 "source_date_quality": normalization.get("source_date_quality", {}),
                 "geospatial": {
                     "map_markers": geospatial["map_markers"],

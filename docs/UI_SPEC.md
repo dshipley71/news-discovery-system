@@ -44,16 +44,27 @@ Warning sources:
 
 ### 1.3 Timeline Panel
 Contains:
-- daily article count plot from `stages.aggregation.daily_counts`
+- daily canonical article count plot from `stages.aggregation.daily_counts`
 - peak annotations when available
 - trend summary text
 - explicit drill-down table from `artifacts.evidence_bundles.peak_to_clusters_articles`
 - peak detail selector and JSON detail panel
+- per-day diagnostics from `stages.aggregation.daily_counts[*]`:
+  - `raw_retrieved_count`
+  - `duplicate_ratio`
+  - `dominant_source`
+  - `source_breakdown[]`
 - dated/undated integrity summary:
   - dated article count
   - undated article count
   - percent undated
   - primary peak excludes unknown-date buckets when known-date buckets exist
+
+Date semantics in timeline payload:
+- `published_at` (source publication field),
+- `updated_at` (source update field when present),
+- `retrieved_at` (fetch timestamp),
+- `timeline_date_used` (publication-based day used for default trend analysis).
 
 Drill-down path:
 - `peak day -> clusters -> article IDs`
