@@ -1074,7 +1074,33 @@ def test_plot_payload_zero_event_signal_returns_warning_not_invalid() -> None:
         ]
     )
     assert payload["plot_valid"] is True
-    assert payload["error"] == "event_signal_zero_warning"
+    assert payload["error"] == "event_signal_zero_fallback_to_coverage"
+    assert payload["event_signal"] == [3, 2]
+
+
+def test_validation_sets_event_signal_zero_error_when_signal_missing() -> None:
+    validation = workflow._build_validation_report(
+        ingestion={"telemetry": {"ingestion_duplicate_ratio": 0.0}, "source_runs": [], "sources_attempted": []},
+        normalization={"valid_count": 2, "invalid_count": 0, "canonical_articles": [{"source": "s1"}, {"source": "s2"}]},
+        clustering={"clusters": [{"article_ids": ["a1"], "cluster_confidence": 0.9}]},
+        geospatial={"entities": []},
+        citation_index={"citation_count": 2, "citations": [{"claim_classification": "supported"}, {"claim_classification": "supported"}]},
+        evidence_bundles={},
+        timeline=[{"day": "2026-04-01", "event_signal": 0, "article_count": 2, "coverage_volume": 2}],
+        warnings=[],
+        artifacts={
+            "deduplicated_article_set": [{"article_id": "a1"}, {"article_id": "a2"}],
+            "canonical_lineage_duplicate_map": [],
+            "event_artifact": [{"event_id": "event:1"}],
+            "citation_index": {"citations": [{"claim_classification": "supported"}, {"claim_classification": "supported"}]},
+            "evidence_bundles": {},
+            "geospatial_entities_markers": {"entities": []},
+            "analyst_warnings": [],
+            "run_review_log": {"json": {}, "markdown": "x"},
+        },
+    )
+    failed = {event["rule_id"] for event in validation["events"] if event["status"] == "fail"}
+    assert "event_signal_zero_error" in failed
 
 
 def test_source_settings_disable_source_and_required_credentials_skip(monkeypatch: pytest.MonkeyPatch) -> None:
