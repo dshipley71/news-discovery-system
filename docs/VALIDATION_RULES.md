@@ -40,6 +40,7 @@ Each `event` includes:
 | FM-012-timeline-normalization-mismatch | Aggregation inconsistency | fail | fail if timeline total article count != normalization valid_count |
 | FM-016-excessive-undated-articles | Date integrity degradation | warn/fail | warn if undated ratio >= 0.20; fail if >= 0.50 |
 | FM-017-temporal-plausibility-anomaly | Event lifecycle mismatch | warn | warn if coverage rises while event signal is flat/declining or source bias dominates |
+| event_signal_zero_error | Event construction failure | fail | fail if `valid_count > 0` AND `event_signal_total == 0` |
 
 ## Warn vs Stop policy
 - **Warn:** analyst may continue inspection, but must see issue and remediation in UI.

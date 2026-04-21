@@ -30,21 +30,24 @@ Define first-class backend artifacts emitted by `run_workflow` in `src/news_app/
      - `duplicate_article_ids`
      - `duplicate_count`
 
-3. **Cluster artifact**
-   - Path: `stages.clustering.clusters` and `artifacts.cluster_artifact`
-   - Fields per cluster:
+3. **Event artifact (cluster-to-event transformation)**
+   - Path: `stages.clustering.clusters`, `artifacts.cluster_artifact`, and `artifacts.event_artifact`
+   - Intermediate lexical clusters are no longer analyst-facing. Final records are constructed event objects.
+   - Fields per event:
+     - `event_id`
+     - `event_label`
+     - `first_seen_date`
+     - `last_seen_date`
+     - `peak_date`
+     - `event_type`
+     - `article_ids`
+     - `source_ids`
+     - `location` (`event_location`)
+     - `confidence`
+   - Backward-compatible aliases:
      - `cluster_id`
      - `cluster_label`
-     - `article_ids`
-     - `source_diversity`
      - `cluster_confidence`
-     - `cluster_relevance_score`
-     - `temporal_span.start`
-     - `temporal_span.end`
-     - `event_id`
-     - `first_seen_date`
-     - `peak_date`
-     - `last_seen_date`
      - `lifecycle_stage`
      - `heuristic`
 
@@ -131,7 +134,7 @@ The Gradio dashboard reads artifacts directly with these mappings:
   - `stages.geospatial.map_markers` or `artifacts.geospatial_entities_markers.map_markers`
   - `artifacts.evidence_bundles.location_to_clusters_articles`
 - **Cluster explorer**
-  - `artifacts.cluster_artifact`
+  - `artifacts.event_artifact` (fallback: `artifacts.cluster_artifact`)
   - `artifacts.deduplicated_article_set`
   - `artifacts.canonical_lineage_duplicate_map`
 - **Citation/evidence explorer**
@@ -146,7 +149,7 @@ The Gradio dashboard reads artifacts directly with these mappings:
 ## Determinism and Reproducibility
 - IDs are generated with deterministic SHA-1-based seeds.
 - Duplicate keys are deterministic URL/title/date keys.
-- Clustering is deterministic lexical-token grouping.
+- Event construction is deterministic (entity + action + location + time grouping with cross-day merge).
 - Evidence bundle IDs are deterministic from subject keys.
 
 ## Deferred

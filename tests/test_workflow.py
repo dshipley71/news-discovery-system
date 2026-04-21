@@ -404,11 +404,7 @@ def test_geospatial_artifacts_presence_and_absence(monkeypatch: pytest.MonkeyPat
     })
 
     without_geo = run_workflow(run_input)
-    assert without_geo["stages"]["geospatial"]["entities"]
-    assert all(
-        entity["location_type"] == "source_location"
-        for entity in without_geo["stages"]["geospatial"]["entities"]
-    )
+    assert without_geo["stages"]["geospatial"]["entities"] == []
     assert without_geo["stages"]["aggregation"]["geospatial"]["map_markers"] == []
 
 
@@ -573,7 +569,7 @@ def test_source_failure_reporting_distinguishes_skipped_and_empty(monkeypatch: p
     assert ingestion["telemetry"]["per_source_telemetry"]["twitter"]["failed"] is False
 
 
-def test_cluster_distribution_groups_related_articles() -> None:
+def test_event_construction_groups_related_articles() -> None:
     canonical = [
         {"article_id": "a1", "title": "London transit strike causes delays", "snippet": "Commuters face major strike delays", "source": "s1", "published_at": "2026-04-10T01:00:00Z"},
         {"article_id": "a2", "title": "Major strike disrupts London transit", "snippet": "London commuters report delays", "source": "s2", "published_at": "2026-04-10T04:00:00Z"},
@@ -583,10 +579,12 @@ def test_cluster_distribution_groups_related_articles() -> None:
     ]
 
     clustering = workflow._build_clusters(canonical)
-    cluster_sizes = sorted([len(cluster["article_ids"]) for cluster in clustering["clusters"]], reverse=True)
+    filtered, _, _ = workflow._filter_clusters_by_relevance(clustering["clusters"], canonical, "transit strike")
+    events, _, _ = workflow._build_event_lifecycle_models(filtered, canonical)
+    event_sizes = sorted([len(event["article_ids"]) for event in events], reverse=True)
 
-    assert len(clustering["clusters"]) <= 3
-    assert cluster_sizes[0] >= 3
+    assert event_sizes[0] >= 3
+    assert {"event_id", "event_label", "event_type", "source_ids", "location", "confidence"}.issubset(events[0].keys())
 
 
 def test_geospatial_population_multiple_markers() -> None:
@@ -596,12 +594,14 @@ def test_geospatial_population_multiple_markers() -> None:
         {"article_id": "a3", "title": "Tokyo market response", "snippet": "Tokyo traders react quickly", "source": "s", "published_at": "2026-04-10T00:00:00Z"},
     ]
 
-    geo = workflow._extract_geospatial_entities(canonical)
+    clusters = workflow._build_clusters(canonical)["clusters"]
+    events, _, _ = workflow._build_event_lifecycle_models(clusters, canonical)
+    geo = workflow._extract_geospatial_entities(canonical, events)
 
     assert len(geo["entities"]) >= 3
     assert len(geo["map_markers"]) >= 3
     assert all(marker["location_label"] for marker in geo["map_markers"])
-    assert all(entity["location_type"] in {"event_location", "mentioned_location", "source_location"} for entity in geo["entities"])
+    assert all(entity["location_type"] == "event_location" for entity in geo["entities"])
 
 
 def test_timeline_multi_day_and_unknown_handling() -> None:
@@ -953,7 +953,7 @@ def test_temporal_anomaly_detection_for_late_coverage_spike() -> None:
     assert "coverage volume increases" in anomaly["anomaly_explanation"]
 
 
-def test_event_signal_timeline_uses_cluster_first_seen_not_coverage_volume() -> None:
+def test_event_signal_timeline_uses_event_lifecycle_not_coverage_volume() -> None:
     canonical = workflow.normalize_articles(
         [
             {"article_id": "a1", "title": "Artemis II launch", "url": "https://a1", "published_at": "2026-04-01T00:00:00Z", "source": "s1"},
@@ -967,6 +967,7 @@ def test_event_signal_timeline_uses_cluster_first_seen_not_coverage_volume() -> 
     timeline = workflow._build_event_signal_timeline(canonical, canonical, lifecycle_clusters)
     by_day = {row["day"]: row for row in timeline}
     assert by_day["2026-04-01"]["event_signal"] >= 1
+    assert by_day["2026-04-10"]["event_signal"] >= 1
     assert by_day["2026-04-10"]["coverage_volume"] >= by_day["2026-04-01"]["coverage_volume"]
 
 
@@ -1008,6 +1009,72 @@ def test_plot_payload_validity_contract() -> None:
     assert payload["plot_valid"] is True
     assert payload["error"] is None
     assert payload["x"] == ["2026-04-01", "2026-04-02"]
+
+
+def test_multi_article_single_event_grouping() -> None:
+    canonical = workflow.normalize_articles(
+        [
+            {"article_id": "a1", "title": "US military strike in Caribbean", "url": "https://a1", "published_at": "2026-04-01T00:00:00Z", "source": "s1"},
+            {"article_id": "a2", "title": "US military strike reported in Caribbean waters", "url": "https://a2", "published_at": "2026-04-01T03:00:00Z", "source": "s2"},
+            {"article_id": "a3", "title": "US military strike leaves casualties in Caribbean", "url": "https://a3", "published_at": "2026-04-02T01:00:00Z", "source": "s3"},
+        ]
+    )["canonical_articles"]
+    clusters = workflow._build_clusters(canonical)["clusters"]
+    events, _, _ = workflow._build_event_lifecycle_models(clusters, canonical)
+    assert len(events) == 1
+    assert len(events[0]["article_ids"]) == 3
+
+
+def test_cross_day_event_merging() -> None:
+    canonical = workflow.normalize_articles(
+        [
+            {"article_id": "a1", "title": "US military strike in Pacific", "url": "https://a1", "published_at": "2026-04-01T00:00:00Z", "source": "s1"},
+            {"article_id": "a2", "title": "US military strike update in Pacific", "url": "https://a2", "published_at": "2026-04-03T00:00:00Z", "source": "s2"},
+        ]
+    )["canonical_articles"]
+    clusters = workflow._build_clusters(canonical)["clusters"]
+    events, _, _ = workflow._build_event_lifecycle_models(clusters, canonical)
+    assert len(events) == 1
+    assert events[0]["first_seen_date"] == "2026-04-01"
+    assert events[0]["last_seen_date"] == "2026-04-03"
+
+
+def test_event_signal_non_zero_when_articles_exist() -> None:
+    canonical = workflow.normalize_articles(
+        [
+            {"article_id": "a1", "title": "US military strike in Caribbean", "url": "https://a1", "published_at": "2026-04-01T00:00:00Z", "source": "s1"},
+            {"article_id": "a2", "title": "US military strike continues in Caribbean", "url": "https://a2", "published_at": "2026-04-02T00:00:00Z", "source": "s2"},
+        ]
+    )["canonical_articles"]
+    clusters = workflow._build_clusters(canonical)["clusters"]
+    events, _, _ = workflow._build_event_lifecycle_models(clusters, canonical)
+    timeline = workflow._build_event_signal_timeline(canonical, canonical, events)
+    assert sum(point["event_signal"] for point in timeline) > 0
+
+
+def test_event_location_extraction_prefers_event_location() -> None:
+    canonical = workflow.normalize_articles(
+        [
+            {"article_id": "a1", "title": "US military strike in London", "url": "https://publisher.example/a1", "published_at": "2026-04-01T00:00:00Z", "source": "s1"},
+            {"article_id": "a2", "title": "US military strike in London continues", "url": "https://publisher.example/a2", "published_at": "2026-04-02T00:00:00Z", "source": "s2"},
+        ]
+    )["canonical_articles"]
+    clusters = workflow._build_clusters(canonical)["clusters"]
+    events, _, _ = workflow._build_event_lifecycle_models(clusters, canonical)
+    geo = workflow._extract_geospatial_entities(canonical, events)
+    assert geo["map_marker_location_type"] == "event_location"
+    assert all(entity["location_type"] == "event_location" for entity in geo["entities"])
+
+
+def test_plot_payload_zero_event_signal_returns_warning_not_invalid() -> None:
+    payload = workflow._build_plot_payload(
+        [
+            {"day": "2026-04-01", "event_signal": 0, "coverage_volume": 3},
+            {"day": "2026-04-02", "event_signal": 0, "coverage_volume": 2},
+        ]
+    )
+    assert payload["plot_valid"] is True
+    assert payload["error"] == "event_signal_zero_warning"
 
 
 def test_source_settings_disable_source_and_required_credentials_skip(monkeypatch: pytest.MonkeyPatch) -> None:

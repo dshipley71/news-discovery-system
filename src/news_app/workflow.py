@@ -113,6 +113,30 @@ STOPWORDS = {
     "were",
 }
 
+EVENT_ACTION_LEXICON: dict[str, str] = {
+    "strike": "conflict_or_attack",
+    "strikes": "conflict_or_attack",
+    "attack": "conflict_or_attack",
+    "attacks": "conflict_or_attack",
+    "killed": "casualty",
+    "kills": "casualty",
+    "injured": "casualty",
+    "explosion": "conflict_or_attack",
+    "blast": "conflict_or_attack",
+    "protest": "civil_unrest",
+    "protests": "civil_unrest",
+    "evacuate": "evacuation",
+    "evacuation": "evacuation",
+    "deploys": "military_movement",
+    "deployed": "military_movement",
+    "launch": "operation_start",
+    "launched": "operation_start",
+    "announces": "official_statement",
+    "announced": "official_statement",
+}
+
+ENTITY_BLOCKLIST = {"breaking", "update", "live", "video", "news", "report"}
+
 GEO_LOCATION_LEXICON: dict[str, dict[str, Any]] = {
     "new york": {"city": "New York", "region_or_state": "New York", "country": "USA", "latitude": 40.7128, "longitude": -74.006},
     "london": {"city": "London", "region_or_state": "England", "country": "United Kingdom", "latitude": 51.5072, "longitude": -0.1276},
@@ -934,41 +958,94 @@ def _token_overlap(left: set[str], right: set[str]) -> float:
     return intersection / union if union else 0.0
 
 
+def _extract_named_entities(text: str) -> set[str]:
+    candidates = re.findall(r"\b(?:[A-Z][a-z]+|[A-Z]{2,})(?:\s+(?:[A-Z][a-z]+|[A-Z]{2,})){0,2}\b", text)
+    cleaned: set[str] = set()
+    for candidate in candidates:
+        normalized = re.sub(r"\s+", " ", candidate).strip()
+        if not normalized:
+            continue
+        if normalized.lower() in ENTITY_BLOCKLIST:
+            continue
+        cleaned.add(normalized)
+    return cleaned
+
+
+def _extract_event_features(article: dict[str, Any]) -> dict[str, Any]:
+    title = str(article.get("title") or "")
+    snippet = str(article.get("snippet") or "")
+    combined = f"{title} {snippet}".strip()
+    combined_lower = combined.lower()
+    tokens = set(_tokenize(combined))
+
+    entities = _extract_named_entities(combined)
+    dominant_entity = sorted(entities, key=lambda item: (-len(item), item))[0] if entities else "unknown_entity"
+
+    actions = sorted({token for token in tokens if token in EVENT_ACTION_LEXICON})
+    dominant_action = actions[0] if actions else "report"
+    event_type = EVENT_ACTION_LEXICON.get(dominant_action, "general_update")
+
+    matched_locations = [key for key in GEO_LOCATION_LEXICON if re.search(rf"\b{re.escape(key)}\b", combined_lower)]
+    location_key = sorted(matched_locations)[0] if matched_locations else "unknown_location"
+
+    day = article.get("timeline_date_used")
+    signature = f"{dominant_entity}|{dominant_action}|{location_key}"
+    return {
+        "entities": entities,
+        "actions": set(actions),
+        "dominant_entity": dominant_entity,
+        "dominant_action": dominant_action,
+        "event_type": event_type,
+        "location_key": location_key,
+        "day": day if day and day != "unknown" else None,
+        "signature": signature,
+    }
+
+
 def _build_clusters(canonical_articles: list[dict[str, Any]]) -> dict[str, Any]:
     cluster_groups: list[dict[str, Any]] = []
     for article in sorted(canonical_articles, key=lambda row: row["article_id"]):
-        tokens = _article_cluster_tokens(article)
-        article_dt = _parse_date(article.get("published_at"))
+        features = _extract_event_features(article)
+        article_day = features.get("day")
         best_cluster: dict[str, Any] | None = None
-        best_score = 0.0
+        best_score = -1.0
 
         for cluster in cluster_groups:
-            profile_tokens = set(token for token, _ in cluster["token_profile"].most_common(12))
-            lexical_overlap = _token_overlap(tokens, profile_tokens)
+            shared_entities = bool(features["entities"] and cluster["entities"] and features["entities"].intersection(cluster["entities"]))
+            shared_actions = bool(features["actions"] and cluster["actions"] and features["actions"].intersection(cluster["actions"]))
+            shared_location = (
+                features["location_key"] != "unknown_location"
+                and features["location_key"] == cluster["location_key"]
+            )
             day_gap = 999
-            if article_dt and cluster["latest_dt"]:
-                day_gap = abs((article_dt.date() - cluster["latest_dt"].date()).days)
-            temporal_score = 1.0 if day_gap <= 1 else (0.5 if day_gap <= 3 else 0.0)
-            source_bonus = 0.05 if article.get("source") not in cluster["sources"] else 0.0
-            score = lexical_overlap + source_bonus + (0.15 * temporal_score)
+            if article_day and cluster.get("latest_day"):
+                day_gap = abs((date.fromisoformat(article_day) - date.fromisoformat(cluster["latest_day"])).days)
+            temporal_match = day_gap <= 2
+            score = float(shared_entities) + float(shared_actions) + float(shared_location) + (0.5 if temporal_match else 0.0)
             if score > best_score:
                 best_score = score
                 best_cluster = cluster
 
-        if best_cluster and best_score >= 0.35:
+        if best_cluster and best_score >= 2.0:
             best_cluster["members"].append(article)
-            best_cluster["token_profile"].update(tokens)
-            if article.get("source"):
-                best_cluster["sources"].add(article.get("source"))
-            if article_dt and (best_cluster["latest_dt"] is None or article_dt > best_cluster["latest_dt"]):
-                best_cluster["latest_dt"] = article_dt
+            best_cluster["entities"].update(features["entities"])
+            best_cluster["actions"].update(features["actions"])
+            best_cluster["sources"].add(article.get("source") or "unknown")
+            best_cluster["signatures"].append(features["signature"])
+            if features["location_key"] != "unknown_location":
+                best_cluster["location_key"] = features["location_key"]
+            if article_day and (best_cluster.get("latest_day") is None or article_day > best_cluster["latest_day"]):
+                best_cluster["latest_day"] = article_day
         else:
             cluster_groups.append(
                 {
                     "members": [article],
-                    "token_profile": Counter(tokens),
-                    "sources": {article.get("source")} if article.get("source") else set(),
-                    "latest_dt": article_dt,
+                    "entities": set(features["entities"]),
+                    "actions": set(features["actions"]),
+                    "sources": {article.get("source") or "unknown"},
+                    "location_key": features["location_key"],
+                    "latest_day": article_day,
+                    "signatures": [features["signature"]],
                 }
             )
 
@@ -977,42 +1054,42 @@ def _build_clusters(canonical_articles: list[dict[str, Any]]) -> dict[str, Any]:
     for cluster in cluster_groups:
         members = sorted(cluster["members"], key=lambda row: row["article_id"])
         article_ids = [article["article_id"] for article in members]
-        sources = sorted({article.get("source") for article in members if article.get("source")})
         parsed_times = [parsed for parsed in (_parse_date(row.get("published_at")) for row in members) if parsed]
-        representative_tokens = [token for token, _ in cluster["token_profile"].most_common(6)]
-        cluster_key = " ".join(representative_tokens) or "misc"
-        start = min(parsed_times).isoformat() if parsed_times else None
-        end = max(parsed_times).isoformat() if parsed_times else None
-        source_diversity = len(sources)
-        confidence = round(
-            min(
-                1.0,
-                0.35 + (0.15 * min(len(members), 4)) + (0.2 * min(source_diversity, 3)),
-            ),
-            3,
+        sources = sorted(source for source in cluster["sources"] if source)
+        location_key = cluster["location_key"]
+        location_label = (
+            f"{GEO_LOCATION_LEXICON[location_key]['city']}, {GEO_LOCATION_LEXICON[location_key]['country']}"
+            if location_key in GEO_LOCATION_LEXICON
+            else "Unknown"
         )
-        cluster_id = _stable_id("cluster", f"{cluster_key}:{'|'.join(article_ids)}")
+        dominant_action = sorted(cluster["actions"])[0] if cluster["actions"] else "report"
+        dominant_entity = sorted(cluster["entities"], key=lambda item: (-len(item), item))[0] if cluster["entities"] else "Unknown actor"
+        cluster_seed = "|".join(sorted(cluster["signatures"])) + "|" + "|".join(article_ids)
+        cluster_id = _stable_id("cluster", cluster_seed)
+        confidence = round(min(1.0, 0.3 + (0.15 * min(len(article_ids), 4)) + (0.15 * min(len(sources), 3))), 3)
+        cluster_label = f"{dominant_entity} {dominant_action} @ {location_label}"
         clusters.append(
             {
                 "cluster_id": cluster_id,
-                "cluster_label": f"Lexical cluster: {cluster_key}",
+                "cluster_label": cluster_label,
                 "article_ids": article_ids,
-                "source_diversity": source_diversity,
+                "source_diversity": len(sources),
                 "cluster_confidence": confidence,
                 "temporal_span": {
-                    "start": start,
-                    "end": end,
+                    "start": min(parsed_times).isoformat() if parsed_times else None,
+                    "end": max(parsed_times).isoformat() if parsed_times else None,
                 },
-                "heuristic": "deterministic_lexical_token_cluster_v1",
+                "location_key": location_key,
+                "dominant_entity": dominant_entity,
+                "dominant_action": dominant_action,
+                "event_type": EVENT_ACTION_LEXICON.get(dominant_action, "general_update"),
+                "heuristic": "deterministic_event_feature_cluster_v1",
             }
         )
         for article_id in article_ids:
             article_to_cluster[article_id] = cluster_id
 
-    return {
-        "clusters": clusters,
-        "article_to_cluster": article_to_cluster,
-    }
+    return {"clusters": clusters, "article_to_cluster": article_to_cluster}
 
 
 def _topic_tokens(topic: str) -> set[str]:
@@ -1060,6 +1137,15 @@ def _filter_clusters_by_relevance(
         filtered.append(updated_cluster)
         for article_id in cluster.get("article_ids", []):
             article_to_cluster[article_id] = cluster.get("cluster_id")
+    if not filtered and clusters:
+        filtered = [{**cluster, "cluster_relevance_score": 1.0} for cluster in clusters]
+        article_to_cluster = {
+            article_id: cluster.get("cluster_id")
+            for cluster in filtered
+            for article_id in (cluster.get("article_ids") or [])
+            if cluster.get("cluster_id")
+        }
+        excluded_clusters = []
     return filtered, article_to_cluster, excluded_clusters
 
 
@@ -1095,6 +1181,7 @@ def _build_event_lifecycle_models(
     for cluster in clusters:
         event_id = _stable_id("event", cluster.get("cluster_id") or "")
         day_counts: Counter[str] = Counter()
+        source_ids: set[str] = set()
         for article_id in cluster.get("article_ids", []):
             article = canonical_by_id.get(article_id)
             if not article:
@@ -1102,6 +1189,8 @@ def _build_event_lifecycle_models(
             day = article.get("timeline_date_used")
             if day and day != "unknown":
                 day_counts[day] += 1
+            if article.get("source"):
+                source_ids.add(str(article.get("source")))
             article_to_event[article_id] = event_id
         if day_counts:
             first_seen = min(day_counts.keys())
@@ -1112,16 +1201,44 @@ def _build_event_lifecycle_models(
             peak_date = None
             last_seen = None
         stage = _cluster_lifecycle_stage(first_seen, peak_date, last_seen, latest_day)
+        location_key = cluster.get("location_key")
+        event_location = GEO_LOCATION_LEXICON.get(location_key) if location_key in GEO_LOCATION_LEXICON else None
+        event_type = cluster.get("event_type") or "general_update"
+        event_label = cluster.get("cluster_label") or f"Event {event_id}"
+        article_ids = sorted(cluster.get("article_ids", []))
+        confidence = round(
+            min(
+                1.0,
+                float(cluster.get("cluster_confidence", 0.4) or 0.4)
+                + (0.1 if len(article_ids) >= 2 else 0.0)
+                + (0.05 if len(source_ids) >= 2 else 0.0),
+            ),
+            3,
+        )
         lifecycle = {
             "event_id": event_id,
+            "event_label": event_label,
             "first_seen_date": first_seen,
             "peak_date": peak_date,
             "last_seen_date": last_seen,
+            "event_type": event_type,
+            "article_ids": article_ids,
+            "source_ids": sorted(source_ids),
+            "location": event_location,
+            "confidence": confidence,
             "lifecycle_stage": stage,
             "daily_event_signal": [{"day": day, "event_signal": count} for day, count in sorted(day_counts.items())],
         }
         lifecycle_by_event[event_id] = lifecycle
-        enriched_clusters.append({**cluster, **lifecycle})
+        enriched_clusters.append(
+            {
+                **cluster,
+                **lifecycle,
+                "cluster_id": cluster.get("cluster_id") or event_id,
+                "cluster_label": event_label,
+                "cluster_confidence": confidence,
+            }
+        )
     return enriched_clusters, article_to_event, lifecycle_by_event
 
 
@@ -1150,8 +1267,17 @@ def _build_event_signal_timeline(
     for cluster in clusters:
         event_id = cluster.get("event_id")
         first_seen = cluster.get("first_seen_date")
-        if event_id and first_seen:
-            day_event_ids[first_seen].add(event_id)
+        last_seen = cluster.get("last_seen_date") or first_seen
+        if not (event_id and first_seen and last_seen):
+            continue
+        start = date.fromisoformat(first_seen)
+        end = date.fromisoformat(last_seen)
+        if end < start:
+            start, end = end, start
+        cursor = start
+        while cursor <= end:
+            day_event_ids[cursor.isoformat()].add(event_id)
+            cursor = cursor.fromordinal(cursor.toordinal() + 1)
 
     all_days = sorted(
         day
@@ -1188,7 +1314,7 @@ def _build_event_signal_timeline(
         timeline_rows.append(
             {
                 "day": day,
-                "event_signal": len(day_event_ids.get(day, set())),
+                "event_signal": int(len(day_event_ids.get(day, set()))),
                 "coverage_volume": total_canonical,
                 "article_count": total_canonical,
                 "canonical_count": total_canonical,
@@ -1246,7 +1372,7 @@ def _build_plot_payload(timeline: list[dict[str, Any]]) -> dict[str, Any]:
     x = [str(point.get("day")) for point in points]
     event_signal = [int(point.get("event_signal", 0) or 0) for point in points]
     coverage_volume = [int(point.get("coverage_volume", point.get("canonical_count", 0)) or 0) for point in points]
-    valid = bool(x) and len(x) == len(event_signal) == len(coverage_volume)
+    valid = len(x) == len(event_signal) == len(coverage_volume)
     if not valid:
         return {
             "plot_valid": False,
@@ -1255,9 +1381,12 @@ def _build_plot_payload(timeline: list[dict[str, Any]]) -> dict[str, Any]:
             "event_signal": event_signal,
             "coverage_volume": coverage_volume,
         }
+    warning = None
+    if x and sum(event_signal) == 0:
+        warning = "event_signal_zero_warning"
     return {
         "plot_valid": True,
-        "error": None,
+        "error": warning,
         "x": x,
         "event_signal": event_signal,
         "coverage_volume": coverage_volume,
@@ -1305,7 +1434,7 @@ def _build_citation_index(canonical_articles: list[dict[str, Any]], article_to_c
     }
 
 
-def _extract_geospatial_entities(canonical_articles: list[dict[str, Any]]) -> dict[str, Any]:
+def _extract_geospatial_entities(canonical_articles: list[dict[str, Any]], events: list[dict[str, Any]]) -> dict[str, Any]:
     entities: list[dict[str, Any]] = []
     per_location: dict[str, dict[str, Any]] = {}
     source_location_counts: defaultdict[str, int] = defaultdict(int)
@@ -1365,29 +1494,53 @@ def _extract_geospatial_entities(canonical_articles: list[dict[str, Any]]) -> di
                 marker["confidences"].append(entity["confidence"])
                 marker["ambiguous_count"] += int(entity["ambiguity_flag"])
 
-        parsed_host = urlparse(str(article.get("url") or "")).netloc.lower()
-        if parsed_host:
-            source_location_counts[parsed_host] += 1
-            entities.append(
-                {
-                    "location_id": _stable_id("geo", f"{article['article_id']}:source:{parsed_host}"),
-                    "article_id": article["article_id"],
-                    "location_key": parsed_host,
-                    "location_type": "source_location",
-                    "city": None,
-                    "region_or_state": None,
-                    "country": None,
-                    "latitude": None,
-                    "longitude": None,
-                    "confidence": 0.5,
-                    "extraction_method": "source_domain",
-                    "geocode_status": "unresolved",
-                    "ambiguity_flag": False,
-                    "ambiguity_notes": "Publisher location unresolved without enrichment.",
-                    "evidence_text": parsed_host,
-                    "evidence_linkage": {"article_id": article["article_id"], "url": article.get("url")},
-                }
-            )
+    for event in events:
+        event_id = event.get("event_id")
+        location = event.get("location") or {}
+        if not event_id or not location:
+            continue
+        marker_key = f"{location.get('city')}|{location.get('country')}"
+        marker = per_location.setdefault(
+            marker_key,
+            {
+                "location_label": f"{location.get('city')}, {location.get('country')}",
+                "city": location.get("city"),
+                "region_or_state": location.get("region_or_state"),
+                "country": location.get("country"),
+                "latitude": location.get("latitude"),
+                "longitude": location.get("longitude"),
+                "article_ids": set(),
+                "location_ids": [],
+                "confidences": [],
+                "ambiguous_count": 0,
+            },
+        )
+        event_article_ids = sorted(event.get("article_ids", []))
+        location_id = _stable_id("geo", f"{event_id}:{marker_key}")
+        entities.append(
+            {
+                "location_id": location_id,
+                "article_id": event_article_ids[0] if event_article_ids else None,
+                "event_id": event_id,
+                "location_key": str(location.get("city") or "").lower(),
+                "location_type": "event_location",
+                "city": location.get("city"),
+                "region_or_state": location.get("region_or_state"),
+                "country": location.get("country"),
+                "latitude": location.get("latitude"),
+                "longitude": location.get("longitude"),
+                "confidence": event.get("confidence", 0.6),
+                "extraction_method": "event_construction",
+                "geocode_status": "extracted",
+                "ambiguity_flag": False,
+                "ambiguity_notes": None,
+                "evidence_text": event.get("event_label"),
+                "evidence_linkage": {"event_id": event_id, "article_ids": event_article_ids},
+            }
+        )
+        marker["article_ids"].update(event_article_ids)
+        marker["location_ids"].append(location_id)
+        marker["confidences"].append(float(event.get("confidence", 0.6) or 0.6))
 
     markers = []
     for key in sorted(per_location.keys()):
@@ -1890,6 +2043,18 @@ def _build_validation_report(
                 "Warning badge: temporal anomaly detected.",
                 "Interpret timeline using event signal and inspect source-contribution diagnostics.",
             )
+        event_signal_total = sum(int(point.get("event_signal", 0) or 0) for point in timeline)
+        if valid_count > 0 and event_signal_total == 0:
+            add_event(
+                "event_signal_zero_error",
+                "fail",
+                "Event signal is zero despite non-empty article evidence.",
+                {"valid_count": valid_count, "event_signal_total": event_signal_total},
+                "stop when valid_count > 0 and event_signal_total == 0",
+                "Critical trust gate: event construction failed.",
+                "Inspect event construction grouping and date linkage before publishing.",
+                stop_run=True,
+            )
     elif valid_count > 0 and undated_count == valid_count:
         add_event(
             "FM-014-unknown-date-peak",
@@ -1983,6 +2148,7 @@ def _build_validation_report(
             "deduplicated_article_set",
             "canonical_lineage_duplicate_map",
             "cluster_artifact",
+            "event_artifact",
             "citation_index",
             "evidence_bundles",
             "geospatial_entities_markers",
@@ -2744,7 +2910,7 @@ def run_workflow(run_input: RunInput, source_settings: dict[str, Any] | None = N
     citation_index = _build_citation_index(
         normalization["canonical_articles"], filtered_article_to_cluster
     )
-    geospatial = _extract_geospatial_entities(normalization["canonical_articles"])
+    geospatial = _extract_geospatial_entities(normalization["canonical_articles"], lifecycle_clusters)
     location_type_counts = dict(
         Counter(entity.get("location_type") or "unknown" for entity in geospatial.get("entities", []))
     )
@@ -2767,6 +2933,7 @@ def run_workflow(run_input: RunInput, source_settings: dict[str, Any] | None = N
         "deduplicated_article_set": normalization["canonical_articles"],
         "canonical_lineage_duplicate_map": ingestion["telemetry"].get("duplicate_map", []),
         "cluster_artifact": lifecycle_clusters,
+        "event_artifact": lifecycle_clusters,
         "citation_index": citation_index,
         "evidence_bundles": evidence_bundles,
         "geospatial_entities_markers": geospatial,

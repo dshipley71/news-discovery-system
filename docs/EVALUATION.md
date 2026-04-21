@@ -44,6 +44,7 @@ Readiness bands:
 - Artifact-contract failure detection rate.
 - Temporal anomaly detection rate (late coverage spikes vs event signal).
 - Source-dominance disclosure rate for peak days.
+- Event-signal zero-error block rate (`event_signal_zero_error`).
 
 ### Analyst-operations KPIs
 - Median time-to-diagnose from UI-only.
@@ -65,6 +66,7 @@ This supports run-level trust audits and reviewer replay.
 2. Empty ingestion and missing artifacts could degrade analyst trust if not explicitly blocked.
 3. Rate-limit behavior existed technically but lacked explicit validation-level signaling.
 4. Timeline spike reliability and citation sufficiency needed explicit trust thresholds.
+5. Event construction failures could previously emit `event_signal=0` with non-empty article evidence; now blocked.
 
 ## 7) Hardening outcomes expected
 - No silent major failure paths.
