@@ -1023,6 +1023,7 @@ def test_multi_article_single_event_grouping() -> None:
     events, _, _ = workflow._build_event_lifecycle_models(clusters, canonical)
     assert len(events) == 1
     assert len(events[0]["article_ids"]) == 3
+    assert events[0]["event_label"] != "Unknown actor @ Unknown location"
 
 
 def test_cross_day_event_merging() -> None:
@@ -1037,6 +1038,20 @@ def test_cross_day_event_merging() -> None:
     assert len(events) == 1
     assert events[0]["first_seen_date"] == "2026-04-01"
     assert events[0]["last_seen_date"] == "2026-04-03"
+    assert events[0]["peak_date"] in {"2026-04-01", "2026-04-03"}
+
+
+def test_event_feature_extraction_entity_action_location() -> None:
+    article = {
+        "article_id": "a1",
+        "title": "US military intercepts vessel in Caribbean Sea",
+        "snippet": "Pentagon says Coast Guard intercepts a drug boat in the Caribbean Sea.",
+        "timeline_date_used": "2026-04-01",
+    }
+    features = workflow._extract_event_features(article)
+    assert features["dominant_entity"] in {"US military", "Pentagon", "Coast Guard"}
+    assert features["dominant_action"] == "intercepts"
+    assert features["location_key"] == "caribbean sea"
 
 
 def test_event_signal_non_zero_when_articles_exist() -> None:
@@ -1050,6 +1065,7 @@ def test_event_signal_non_zero_when_articles_exist() -> None:
     events, _, _ = workflow._build_event_lifecycle_models(clusters, canonical)
     timeline = workflow._build_event_signal_timeline(canonical, canonical, events)
     assert sum(point["event_signal"] for point in timeline) > 0
+    assert all(point["event_signal"] >= 1 for point in timeline)
 
 
 def test_event_location_extraction_prefers_event_location() -> None:
@@ -1064,6 +1080,7 @@ def test_event_location_extraction_prefers_event_location() -> None:
     geo = workflow._extract_geospatial_entities(canonical, events)
     assert geo["map_marker_location_type"] == "event_location"
     assert all(entity["location_type"] == "event_location" for entity in geo["entities"])
+    assert geo["map_markers"]
 
 
 def test_plot_payload_zero_event_signal_returns_warning_not_invalid() -> None:
