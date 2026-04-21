@@ -133,9 +133,39 @@ EVENT_ACTION_LEXICON: dict[str, str] = {
     "launched": "operation_start",
     "announces": "official_statement",
     "announced": "official_statement",
+    "seize": "interdiction",
+    "seizes": "interdiction",
+    "seized": "interdiction",
+    "intercept": "interdiction",
+    "intercepts": "interdiction",
+    "intercepted": "interdiction",
 }
 
 ENTITY_BLOCKLIST = {"breaking", "update", "live", "video", "news", "report"}
+
+EVENT_ENTITY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\b(us military|u\.s\. military|american military)\b", re.IGNORECASE), "US military"),
+    (re.compile(r"\bpentagon\b", re.IGNORECASE), "Pentagon"),
+    (re.compile(r"\bcoast guard\b", re.IGNORECASE), "Coast Guard"),
+    (re.compile(r"\bnavy\b", re.IGNORECASE), "Navy"),
+    (re.compile(r"\barmy\b", re.IGNORECASE), "Army"),
+    (re.compile(r"\bpolice\b", re.IGNORECASE), "Police"),
+]
+
+EVENT_ACTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\b(strike|strikes|struck|airstrike|airstrikes)\b", re.IGNORECASE), "strikes"),
+    (re.compile(r"\b(seize|seizes|seized|capture|captures|captured)\b", re.IGNORECASE), "seizes"),
+    (re.compile(r"\b(kill|kills|killed)\b", re.IGNORECASE), "kills"),
+    (re.compile(r"\b(intercept|intercepts|intercepted)\b", re.IGNORECASE), "intercepts"),
+    (re.compile(r"\b(attack|attacks|attacked)\b", re.IGNORECASE), "attacks"),
+]
+
+EVENT_LOCATION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bcaribbean(?:\s+sea|\s+waters?)?\b", re.IGNORECASE), "caribbean sea"),
+    (re.compile(r"\beastern pacific\b", re.IGNORECASE), "eastern pacific"),
+    (re.compile(r"\bpacific(?:\s+ocean|\s+waters?)?\b", re.IGNORECASE), "pacific ocean"),
+    (re.compile(r"\batlantic(?:\s+ocean|\s+waters?)?\b", re.IGNORECASE), "atlantic ocean"),
+]
 
 GEO_LOCATION_LEXICON: dict[str, dict[str, Any]] = {
     "new york": {"city": "New York", "region_or_state": "New York", "country": "USA", "latitude": 40.7128, "longitude": -74.006},
@@ -161,6 +191,10 @@ GEO_LOCATION_LEXICON: dict[str, dict[str, Any]] = {
     "toronto": {"city": "Toronto", "region_or_state": "Ontario", "country": "Canada", "latitude": 43.6532, "longitude": -79.3832},
     "vancouver": {"city": "Vancouver", "region_or_state": "British Columbia", "country": "Canada", "latitude": 49.2827, "longitude": -123.1207},
     "mexico city": {"city": "Mexico City", "region_or_state": "Mexico City", "country": "Mexico", "latitude": 19.4326, "longitude": -99.1332},
+    "caribbean sea": {"city": "Caribbean Sea", "region_or_state": "Caribbean", "country": "International Waters", "latitude": 15.0, "longitude": -75.0},
+    "eastern pacific": {"city": "Eastern Pacific", "region_or_state": "Pacific Ocean", "country": "International Waters", "latitude": 10.0, "longitude": -110.0},
+    "pacific ocean": {"city": "Pacific Ocean", "region_or_state": "Pacific Ocean", "country": "International Waters", "latitude": 0.0, "longitude": -140.0},
+    "atlantic ocean": {"city": "Atlantic Ocean", "region_or_state": "Atlantic Ocean", "country": "International Waters", "latitude": 20.0, "longitude": -40.0},
 }
 
 
@@ -971,6 +1005,36 @@ def _extract_named_entities(text: str) -> set[str]:
     return cleaned
 
 
+def _extract_event_entity(text: str, fallback_entities: set[str]) -> tuple[str | None, str]:
+    for pattern, label in EVENT_ENTITY_PATTERNS:
+        if pattern.search(text):
+            return label, "pattern"
+    if fallback_entities:
+        return sorted(fallback_entities, key=lambda item: (-len(item), item))[0], "named_entity"
+    return None, "none"
+
+
+def _extract_event_action(text: str, tokens: set[str]) -> tuple[str | None, str]:
+    for pattern, label in EVENT_ACTION_PATTERNS:
+        if pattern.search(text):
+            return label, "pattern"
+    actions = sorted({token for token in tokens if token in EVENT_ACTION_LEXICON})
+    if actions:
+        return actions[0], "lexicon"
+    return None, "none"
+
+
+def _extract_event_location_key(text: str) -> tuple[str | None, str]:
+    lowered = text.lower()
+    for pattern, location_key in EVENT_LOCATION_PATTERNS:
+        if pattern.search(text):
+            return location_key, "pattern"
+    matched_locations = [key for key in GEO_LOCATION_LEXICON if re.search(rf"\b{re.escape(key)}\b", lowered)]
+    if matched_locations:
+        return sorted(matched_locations)[0], "lexicon"
+    return None, "none"
+
+
 def _extract_event_features(article: dict[str, Any]) -> dict[str, Any]:
     title = str(article.get("title") or "")
     snippet = str(article.get("snippet") or "")
@@ -979,26 +1043,38 @@ def _extract_event_features(article: dict[str, Any]) -> dict[str, Any]:
     tokens = set(_tokenize(combined))
 
     entities = _extract_named_entities(combined)
-    dominant_entity = sorted(entities, key=lambda item: (-len(item), item))[0] if entities else "unknown_entity"
+    dominant_entity, entity_method = _extract_event_entity(combined, entities)
 
-    actions = sorted({token for token in tokens if token in EVENT_ACTION_LEXICON})
-    dominant_action = actions[0] if actions else "report"
-    event_type = EVENT_ACTION_LEXICON.get(dominant_action, "general_update")
+    dominant_action, action_method = _extract_event_action(combined, tokens)
+    event_type = EVENT_ACTION_LEXICON.get(dominant_action or "", "general_update")
 
-    matched_locations = [key for key in GEO_LOCATION_LEXICON if re.search(rf"\b{re.escape(key)}\b", combined_lower)]
-    location_key = sorted(matched_locations)[0] if matched_locations else "unknown_location"
+    location_key, location_method = _extract_event_location_key(combined)
 
     day = article.get("timeline_date_used")
-    signature = f"{dominant_entity}|{dominant_action}|{location_key}"
+    signature = f"{dominant_entity or 'unresolved'}|{dominant_action or 'update'}|{location_key or 'unresolved_location'}"
+    extraction_confidence = 0.4
+    extraction_quality = 0
+    if dominant_entity:
+        extraction_quality += 1
+    if dominant_action:
+        extraction_quality += 1
+    if location_key:
+        extraction_quality += 1
+    extraction_confidence += (0.15 * extraction_quality)
     return {
         "entities": entities,
-        "actions": set(actions),
+        "actions": {dominant_action} if dominant_action else set(),
         "dominant_entity": dominant_entity,
         "dominant_action": dominant_action,
         "event_type": event_type,
         "location_key": location_key,
         "day": day if day and day != "unknown" else None,
         "signature": signature,
+        "extraction_confidence": round(min(0.95, extraction_confidence), 3),
+        "entity_method": entity_method,
+        "action_method": action_method,
+        "location_method": location_method,
+        "low_confidence": extraction_quality < 2,
     }
 
 
@@ -1013,10 +1089,7 @@ def _build_clusters(canonical_articles: list[dict[str, Any]]) -> dict[str, Any]:
         for cluster in cluster_groups:
             shared_entities = bool(features["entities"] and cluster["entities"] and features["entities"].intersection(cluster["entities"]))
             shared_actions = bool(features["actions"] and cluster["actions"] and features["actions"].intersection(cluster["actions"]))
-            shared_location = (
-                features["location_key"] != "unknown_location"
-                and features["location_key"] == cluster["location_key"]
-            )
+            shared_location = bool(features["location_key"] and features["location_key"] == cluster["location_key"])
             day_gap = 999
             if article_day and cluster.get("latest_day"):
                 day_gap = abs((date.fromisoformat(article_day) - date.fromisoformat(cluster["latest_day"])).days)
@@ -1041,7 +1114,7 @@ def _build_clusters(canonical_articles: list[dict[str, Any]]) -> dict[str, Any]:
             best_cluster["actions"].update(features["actions"])
             best_cluster["sources"].add(article.get("source") or "unknown")
             best_cluster["signatures"].append(features["signature"])
-            if features["location_key"] != "unknown_location":
+            if features["location_key"]:
                 best_cluster["location_key"] = features["location_key"]
             if article_day and (best_cluster.get("latest_day") is None or article_day > best_cluster["latest_day"]):
                 best_cluster["latest_day"] = article_day
@@ -1055,8 +1128,11 @@ def _build_clusters(canonical_articles: list[dict[str, Any]]) -> dict[str, Any]:
                     "location_key": features["location_key"],
                     "latest_day": article_day,
                     "signatures": [features["signature"]],
+                    "low_confidence_count": 1 if features.get("low_confidence") else 0,
                 }
             )
+        if best_cluster and features.get("low_confidence"):
+            best_cluster["low_confidence_count"] = int(best_cluster.get("low_confidence_count", 0)) + 1
 
     clusters: list[dict[str, Any]] = []
     article_to_cluster: dict[str, str] = {}
@@ -1069,10 +1145,10 @@ def _build_clusters(canonical_articles: list[dict[str, Any]]) -> dict[str, Any]:
         location_label = (
             f"{GEO_LOCATION_LEXICON[location_key]['city']}, {GEO_LOCATION_LEXICON[location_key]['country']}"
             if location_key in GEO_LOCATION_LEXICON
-            else "Unknown"
+            else "unresolved location"
         )
-        dominant_action = sorted(cluster["actions"])[0] if cluster["actions"] else "report"
-        dominant_entity = sorted(cluster["entities"], key=lambda item: (-len(item), item))[0] if cluster["entities"] else "Unknown actor"
+        dominant_action = sorted(cluster["actions"])[0] if cluster["actions"] else "reported activity"
+        dominant_entity = sorted(cluster["entities"], key=lambda item: (-len(item), item))[0] if cluster["entities"] else "Unresolved entity"
         cluster_seed = "|".join(sorted(cluster["signatures"])) + "|" + "|".join(article_ids)
         cluster_id = _stable_id("cluster", cluster_seed)
         confidence = round(min(1.0, 0.35 + (0.15 * min(len(article_ids), 4)) + (0.15 * min(len(sources), 3))), 3)
@@ -1093,6 +1169,7 @@ def _build_clusters(canonical_articles: list[dict[str, Any]]) -> dict[str, Any]:
                 "dominant_action": dominant_action,
                 "event_type": EVENT_ACTION_LEXICON.get(dominant_action, "general_update"),
                 "heuristic": "deterministic_event_feature_cluster_v1",
+                "low_confidence": int(cluster.get("low_confidence_count", 0) or 0) >= len(article_ids),
             }
         )
         for article_id in article_ids:
@@ -1226,20 +1303,24 @@ def _build_event_lifecycle_models(
         dominant_entity = (
             sorted(entities, key=lambda item: (-len(item), item))[0]
             if entities
-            else (cluster.get("dominant_entity") or "Unknown actor")
+            else (cluster.get("dominant_entity") or "Unresolved entity")
         )
-        location_label = event_location["city"] if event_location else "Unknown location"
+        location_label = event_location["city"] if event_location else "unresolved location"
         event_label = f"{dominant_entity} {dominant_action} @ {location_label}"
         article_ids = sorted(cluster.get("article_ids", []))
+        unresolved_components = int(not entities) + int(not actions) + int(event_location is None)
+        low_confidence = unresolved_components >= 2 or bool(cluster.get("low_confidence"))
         confidence = round(
             min(
                 1.0,
                 float(cluster.get("cluster_confidence", 0.4) or 0.4)
                 + (0.1 if len(article_ids) >= 2 else 0.0)
                 + (0.05 if len(source_ids) >= 2 else 0.0),
-            ),
+            )
+            - (0.2 if low_confidence else 0.0),
             3,
         )
+        confidence = max(0.2, confidence)
         lifecycle = {
             "event_id": event_id,
             "event_label": event_label,
@@ -1254,6 +1335,7 @@ def _build_event_lifecycle_models(
             "location": event_location,
             "event_location": event_location,
             "confidence": confidence,
+            "low_confidence": low_confidence,
             "lifecycle_stage": stage,
             "daily_event_signal": [{"day": day, "event_signal": count} for day, count in sorted(day_counts.items())],
         }
