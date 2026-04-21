@@ -262,7 +262,11 @@ def _build_map_plot(map_rows: list[dict[str, Any]]) -> go.Figure:
 def _build_cluster_views(result: dict[str, Any]) -> dict[str, Any]:
     artifacts = result.get("artifacts", {})
     stages = result.get("stages", {})
-    clusters = artifacts.get("cluster_artifact") or stages.get("clustering", {}).get("clusters", [])
+    clusters = (
+        artifacts.get("event_artifact")
+        or artifacts.get("cluster_artifact")
+        or stages.get("clustering", {}).get("clusters", [])
+    )
     canonical_articles = artifacts.get("deduplicated_article_set") or stages.get("normalization", {}).get("canonical_articles", [])
     citations = artifacts.get("citation_index", {}).get("citations") or stages.get("citation_traceability", {}).get("citations", [])
 
@@ -316,7 +320,11 @@ def _build_cluster_views(result: dict[str, Any]) -> dict[str, Any]:
 
         cluster_lookup[cluster_id] = {
             "cluster_id": cluster_id,
+            "event_id": cluster.get("event_id"),
             "cluster_label": cluster.get("cluster_label"),
+            "event_label": cluster.get("event_label"),
+            "event_type": cluster.get("event_type"),
+            "event_location": cluster.get("location"),
             "article_count": article_count,
             "duplicate_count": duplicate_count,
             "duplicate_ratio": duplicate_ratio,
